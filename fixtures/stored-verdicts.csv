@@ -1,0 +1,11 @@
+instance_id,tier,state,agreement,patch_overlap_flag,fix_pr_linked_in,fix_commit_date,fix_commit_sha
+astropy__astropy-13236,A,flag,agreed,0,,not located,
+astropy__astropy-14096,B,flag,agreed,0,,2022-12-05T19:24:34.000Z,5bbd5b9b7cdfd0e663a9de99e4eae2f41d4a53fa
+astropy__astropy-14539,C,flag,n/a,1,,2023-03-17T13:08:09.000Z,f8877ac3ce7d6a175c17cc741ff688f0037caa8d
+astropy__astropy-14995,A,flag,agreed,1,,2023-07-05T14:05:01.000Z,c0702dae400e4a3445afcb62e65e298b9d2f7465
+django__django-10097,none,disputed,split,0,issue,2018-07-23T14:30:01.000Z,cdcf4164bec9dc09465424d7042c3f9d4f0f1fdc
+django__django-12273,C,flag,n/a,1,,2020-01-15T07:28:30.000Z,63e6ee1f996e16a1a6238fed16fdb28bce156bc6
+django__django-13012,C,flag,n/a,1,,2020-06-03T05:29:41.000Z,df32fd42b84cc6dbba173201f244491b0d154a63
+django__django-14539,none,link,agreed,0,discussion,2021-07-07T09:19:33.000Z,68cc04887b3c5b7ce8f28eaae5de266db99ca9a6
+django__django-15525,C,flag,n/a,1,discussion,2022-03-18T19:57:08.000Z,4b8e4f506079419c7995107fad46416ee5add951
+psf__requests-1921,none,clear,agreed,0,,2014-03-03T18:13:13.000Z,3c4b3747e45318ba8df2224fea13895e5210915f

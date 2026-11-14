@@ -1,0 +1,15 @@
+{
+  "name": "leaklens",
+  "version": "0.1.0",
+  "description": "Per-task solution-leakage check for coding benchmarks (SWE-bench style). Runs on your machine.",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "leaklens": "bin/leaklens.mjs" },
+  "files": ["bin", "src", "data", "DEFINITIONS.md", "README.md", "LICENSE"],
+  "engines": { "node": ">=18.17" },
+  "scripts": {
+    "test": "node --test test/engine.test.mjs test/rescore.test.mjs",
+    "definitions": "node scripts/gen-definitions.mjs"
+  },
+  "keywords": ["swe-bench", "benchmark", "contamination", "leakage", "evaluation"]
+}
