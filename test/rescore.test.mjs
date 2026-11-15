@@ -50,10 +50,14 @@ test('text report: three scores, flagged tasks solved, a table row and a citatio
   const r = await run(['rescore', SONAR, '--label', 'Sonar (Opus 4.5)']);
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /All 500 tasks\s+79\.2%/);
-  assert.match(r.stdout, /351 unflagged tasks\s+74\.1%/);
-  assert.match(r.stdout, /Flagged tasks it solved \(136\): the task text hands over the fix/);
+  assert.match(r.stdout, /351 tasks outside the 149 headline flags\s+74\.1%/);
+  assert.match(r.stdout, /149 headline-flagged tasks\s+91\.3%/);
+  assert.match(r.stdout, /not a clean set: they include tasks a third check settled as stating the fix/);
+  assert.match(r.stdout, /Headline-flagged tasks it solved \(136\): the task text hands over the fix/);
   assert.match(r.stdout, /\| Sonar \(Opus 4\.5\) \| 79\.2% \(396\/500\) \| 74\.1% \(260\/351\) \| −5\.1 \| 136\/149 \|/);
-  assert.match(r.stdout, /SWE-bench Verified: 79\.2% \(396\/500\) on all tasks, 74\.1% \(260\/351\) on the 351 tasks whose text does not hand over the fix/);
+  assert.match(r.stdout, /SWE-bench Verified: 79\.2% \(396\/500\) on all tasks, 74\.1% \(260\/351\) on the 351 tasks outside the 149 headline flags \(Leaklens headline flags: Tier A where both checks agreed on a quote that states the fix, or Tier C; methodology m1\.1/);
+  // M9 pass 1 item 1: the restated set is never described as tasks that do not hand over the fix.
+  assert.doesNotMatch(r.stdout, /unflagged|do(es)? not hand over the fix/i);
   assert.match(r.stdout, /exposure was possible, not that a model trained on it/);
   assert.doesNotMatch(r.stdout, /contaminat|cheat/i);
 });
@@ -163,4 +167,14 @@ test('the same ID with two disagreeing statuses is refused and named (lines, CSV
   const same = parseResolved(`${A} PASSED\n${A} PASSED\n${B} FAILED\n${B} FAILED\n`);
   assert.deepEqual(same.ids, [A]); assert.equal(same.notResolved, 1);
   refuses(`instance_id,model_patch\n${A},"diff --git a/x b/x"\n`, /"model_patch" column and no status column: this looks like a predictions file/);
+});
+
+test('a generic harness file name never becomes the model name in the row (M9 pass 1 item 5)', async () => {
+  const { labelFromFileName, tableRow, rescore: rs } = await import('../src/rescore.mjs');
+  for (const n of ['results.json', 'results (1).json', 'results-2.json', 'report.json', 'C:\\runs\\report.json', 'all_preds.jsonl', 'predictions.json', 'resolved_ids.txt', 'output.csv', 'swe-bench-verified.json', '']) assert.equal(labelFromFileName(n), '', n);
+  assert.equal(labelFromFileName('20240620_sweagent_claude3.5sonnet.json'), '20240620_sweagent_claude3.5sonnet');
+  assert.equal(labelFromFileName('my-agent-v2.json'), 'my-agent-v2');
+  const flags = JSON.parse(fs.readFileSync(new URL('../data/headline-flags.json', import.meta.url), 'utf8'));
+  const r = rs(['django__django-11099'], flags, 'verified');
+  assert.match(tableRow(r, labelFromFileName('results.json') || 'your model'), /^\| your model \|/);
 });

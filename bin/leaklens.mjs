@@ -48,7 +48,7 @@ Options:
   -h, --help           this text
   -v, --version        version
 
-rescore: your score on all tasks and on the tasks whose text does not hand over the fix.
+rescore: your score on all tasks and on the tasks outside the Leaklens headline flags.
   <results>            resolved IDs: SWE-bench results.json ("resolved"), an sb-cli or harness report
                        ("resolved_ids"), a per-instance report.json, JSONL with instance_id and resolved,
                        or a plain list of IDs; - reads standard input. No network, no model.

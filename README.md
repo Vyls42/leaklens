@@ -68,9 +68,9 @@ mkdir -p ~/.agents/skills && cp -R skills/leaklens ~/.agents/skills/leaklens
 
 Then ask: "Use the leaklens skill to check tasks.jsonl for solution leakage and tell me which tasks to look at."
 
-## Your score, on the unflagged tasks
+## Your score, outside the headline flags
 
-`rescore` takes your SWE-bench per-instance results and prints your score on all tasks and on the tasks whose text does not hand over the fix. It also lists the flagged tasks your model solved, a markdown table row and a citation line. It runs locally, with no network and no model. The flags are the Leaklens headline flags for SWE-bench Verified and Lite (`data/headline-flags.json`, the same flags as the Leaklens dataset and https://leaklens.grain64.com/rescore).
+`rescore` takes your SWE-bench per-instance results and prints your score on all tasks and on the tasks outside the Leaklens headline flags (Tier A where both checks agreed on a quote that states the fix, or Tier C). It also lists the headline-flagged tasks your model solved, a markdown table row and a citation line. It runs locally, with no network and no model. The flags are the Leaklens headline flags for SWE-bench Verified and Lite (`data/headline-flags.json`, the same flags as the Leaklens dataset and https://leaklens.grain64.com/rescore).
 
 ```sh
 node bin/leaklens.mjs rescore fixtures/rescore/20251205_sonar-foundation-agent_claude-opus-4-5.json   # a public leaderboard entry
@@ -78,14 +78,16 @@ node bin/leaklens.mjs rescore results.json --label "my-agent"       # results.js
 node bin/leaklens.mjs rescore lite-ids.txt --benchmark lite --json  # Lite; numbers as JSON
 ```
 
-The first line prints (flagged task list shortened):
+The first line prints (task list shortened):
 
 ```text
 SWE-bench Verified (Leaklens headline flags, methodology m1.1, as of 2026-11-08)
 
-  All 500 tasks                 79.2%  (396 resolved)
-  351 unflagged tasks           74.1%  (260 resolved)   change −5.1 points
-  149 flagged tasks             91.3%  (136 resolved)
+  All 500 tasks                              79.2%  (396 resolved)
+  351 tasks outside the 149 headline flags   74.1%  (260 resolved)   change −5.1 points
+  149 headline-flagged tasks                 91.3%  (136 resolved)
+  Headline flags: Tier A where both checks agreed on a quote that states the fix, or Tier C.
+  The tasks outside the headline flags are not a clean set: they include tasks a third check settled as stating the fix, tasks that point to the fix, and disputed tasks. Those are counted apart from the headline, not removed.
 ```
 
 IDs that are not in the benchmark are listed and left out of every count. A fix commit dated before a cutoff shows that exposure was possible, not that a model trained on it.

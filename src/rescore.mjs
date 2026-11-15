@@ -1,10 +1,17 @@
-// leaklens rescore: a model's SWE-bench score on all tasks and on the tasks whose text does not hand over the fix.
+// leaklens rescore: a model's SWE-bench score on all tasks and on the tasks outside the Leaklens headline flags.
 // Pure functions, no imports: the CLI (bin/leaklens.mjs) and the browser page (leaklens.grain64.com/rescore) run this same file
 // against the same flag file (data/headline-flags.json), so the two cannot count differently. No network, no model.
 
 export const SITE = 'https://leaklens.grain64.com';
 export const ID_RE = /^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-\d+$/;
 export const CAVEAT = 'Flagged means the task text hands over the fix; it does not say a model saw it. A fix commit dated before a cutoff shows that exposure was possible, not that a model trained on it.';
+// One name for the two sets, used by every line below, the CLI, /rescore and the site copy (M9 pass 1 item 1). The set the
+// score is restated on is "the tasks outside the headline flags", never "tasks that do not hand over the fix": it still holds
+// Tier A tasks settled by a third check, Tier B and disputed tasks, which other Leaklens pages describe as stating the fix.
+export const HEADLINE = 'Tier A where both checks agreed on a quote that states the fix, or Tier C';
+export const outsideName = (r) => `${r.unflaggedTotal} tasks outside the ${r.flaggedTotal} headline flags`;
+export const flaggedName = (r) => `${r.flaggedTotal} headline-flagged tasks`;
+export const OUTSIDE_NOTE = 'The tasks outside the headline flags are not a clean set: they include tasks a third check settled as stating the fix, tasks that point to the fix, and disputed tasks. Those are counted apart from the headline, not removed.';
 const ALIASES = { verified: 'swe-bench-verified', lite: 'swe-bench-lite' };
 
 export class RescoreInputError extends Error {}
@@ -221,6 +228,18 @@ export function guessNote(r, how = 'cli') {
     (how === 'page' ? 'Choose the benchmark above if that is wrong.' : `Add --benchmark ${r.alsoFits[0].slug.replace('swe-bench-', '')} if that is wrong.`);
 }
 
+// A dropped file's name becomes the model name for the table row only when it names something: a harness output called
+// results.json, report.json or "results (1).json" says nothing about the model, so the row keeps "your model" (M9 pass 1 item 5).
+const GENERIC_FILE_NAMES = new Set(['results', 'result', 'report', 'reports', 'run', 'runs', 'output', 'outputs', 'out', 'predictions', 'prediction', 'preds', 'all_preds',
+  'eval', 'evaluation', 'evaluations', 'resolved', 'resolved_ids', 'ids', 'instance_ids', 'instances', 'summary', 'final', 'final_report', 'scores', 'score', 'submission',
+  'data', 'harness', 'logs', 'log', 'export', 'download', 'untitled', 'swe-bench', 'swebench', 'verified', 'lite', 'swe-bench-verified', 'swe-bench-lite']);
+export function labelFromFileName(fileName) {
+  const base = String(fileName || '').split(/[\\/]/).pop().replace(/\.(json|jsonl|txt|csv)$/i, '').trim();
+  const core = base.toLowerCase().replace(/\s*\(\d+\)$/, '').replace(/[\s._-]*\d*$/, '').replace(/^[\s._-]+/, '');
+  if (!core || GENERIC_FILE_NAMES.has(core) || GENERIC_FILE_NAMES.has(core.replace(/[\s.]+/g, '_'))) return '';
+  return base.slice(0, 80);
+}
+
 const pct = (k, n) => (n ? Math.round((1000 * k) / n) / 10 : null);
 export const fmtPct = (p) => (p === null ? 'n/a' : p.toFixed(1) + '%');
 
@@ -252,13 +271,13 @@ export function rescore(ids, flags, benchmark) {
 const signed = (x) => (x === null ? 'n/a' : (x > 0 ? '+' : x < 0 ? '−' : '±') + Math.abs(x).toFixed(1));
 
 export function tableHeader(r) {
-  return `| Model | All ${r.total} tasks | ${r.unflaggedTotal} unflagged tasks | Change (points) | Flagged tasks solved |\n|---|---|---|---|---|`;
+  return `| Model | All ${r.total} tasks | ${r.unflaggedTotal} tasks outside the ${r.flaggedTotal} headline flags | Change (points) | Headline-flagged tasks solved |\n|---|---|---|---|---|`;
 }
 export function tableRow(r, label = 'your model') {
   return `| ${label} | ${fmtPct(r.pctAll)} (${r.resolved}/${r.total}) | ${fmtPct(r.pctUnflagged)} (${r.resolvedUnflagged}/${r.unflaggedTotal}) | ${signed(r.change)} | ${r.resolvedFlagged}/${r.flaggedTotal} |`;
 }
 export function citation(r) {
-  return `${r.name}: ${fmtPct(r.pctAll)} (${r.resolved}/${r.total}) on all tasks, ${fmtPct(r.pctUnflagged)} (${r.resolvedUnflagged}/${r.unflaggedTotal}) on the ${r.unflaggedTotal} tasks whose text does not hand over the fix (Leaklens headline flags, methodology ${r.methodologyVersion}, flags as of ${r.asOf}; ${SITE}/rescore).`;
+  return `${r.name}: ${fmtPct(r.pctAll)} (${r.resolved}/${r.total}) on all tasks, ${fmtPct(r.pctUnflagged)} (${r.resolvedUnflagged}/${r.unflaggedTotal}) on the ${outsideName(r)} (Leaklens headline flags: ${HEADLINE}; methodology ${r.methodologyVersion}, flags as of ${r.asOf}; ${SITE}/rescore).`;
 }
 
 // The CLI's text report. The page renders the same fields.
@@ -267,12 +286,15 @@ export function report(r, label = 'your model') {
   L.push(`${r.name} (Leaklens headline flags, methodology ${r.methodologyVersion}, as of ${r.asOf})`);
   if (guessNote(r)) L.push(guessNote(r));
   L.push('');
-  L.push(`  All ${r.total} tasks                ${fmtPct(r.pctAll).padStart(6)}  (${r.resolved} resolved)`);
-  L.push(`  ${r.unflaggedTotal} unflagged tasks          ${fmtPct(r.pctUnflagged).padStart(6)}  (${r.resolvedUnflagged} resolved)   change ${signed(r.change)} points`);
-  L.push(`  ${r.flaggedTotal} flagged tasks            ${fmtPct(r.pctFlagged).padStart(6)}  (${r.resolvedFlagged} resolved)`);
+  const names = [`All ${r.total} tasks`, outsideName(r), flaggedName(r)], w = Math.max(...names.map((n) => n.length)) + 2;
+  L.push(`  ${names[0].padEnd(w)}${fmtPct(r.pctAll).padStart(6)}  (${r.resolved} resolved)`);
+  L.push(`  ${names[1].padEnd(w)}${fmtPct(r.pctUnflagged).padStart(6)}  (${r.resolvedUnflagged} resolved)   change ${signed(r.change)} points`);
+  L.push(`  ${names[2].padEnd(w)}${fmtPct(r.pctFlagged).padStart(6)}  (${r.resolvedFlagged} resolved)`);
+  L.push(`  Headline flags: ${HEADLINE}.`);
+  L.push(`  ${OUTSIDE_NOTE}`);
   L.push('');
   if (r.flaggedSolved.length) {
-    L.push(`Flagged tasks it solved (${r.flaggedSolved.length}): the task text hands over the fix. Evidence: ${SITE}/t/<instance_id>`);
+    L.push(`Headline-flagged tasks it solved (${r.flaggedSolved.length}): the task text hands over the fix. Evidence: ${SITE}/t/<instance_id>`);
     for (const id of r.flaggedSolved) L.push('  ' + id);
     L.push('');
   }

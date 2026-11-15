@@ -177,6 +177,18 @@ export function splitNoneSentence(hasQuote) {
     : 'The two checks disagreed on this task; no quoted evidence is shown for it.';
 }
 
+// The words a person reads for a quote's kind (stored as stated_fix | points_to). site-src/js/app.js L.KIND holds the same words.
+export const KIND_LABEL = { stated_fix: 'States the fix', points_to: 'Points to the file or function', pointer: 'Points to the file or function' };
+
+// M9 pass 1 item 2: the one sentence for a disputed task (one check found something, the other nothing), shared by the CLI,
+// the public table, every audit row (reused rows included, decided at read time) and the sample. `where` says where the quote is.
+export function disputedSentence(anyRunFlag, nChecks, where) {
+  const found = anyRunFlag === 'A' ? 'a stated fix' : 'a pointer to the fix';
+  return nChecks >= 3
+    ? `Disputed after three checks: they did not agree on one reading, and at least one found ${found}. Not counted as a flag${where ? '; the quotes are ' + where : ''}.`
+    : `Disputed: one of the two checks found ${found}, the other found nothing. Not counted as a flag${where ? '; the quote is ' + where : ''}.`;
+}
+
 export function verdictSentence(tier, agreement, firstQuote, ov) {
   if (tier === 'A') return `The text states the fix: “${clip(oneLine(firstQuote || ''), 170)}”`;
   if (tier === 'C') return `${ov.matched} of ${ov.total} added patch lines appear in the issue or discussion.`;
@@ -217,9 +229,7 @@ export function stateOf(tier, j, link) {
 export function verdictOf(tier, state, j, ov, link) {
   let v;
   if (state === 'disputed') {
-    v = j.runs.length >= 3
-      ? `Disputed after three checks: they did not agree on one reading, and at least one found ${j.anyRunFlag === 'A' ? 'a stated fix' : 'a pointer to the fix'}. Not counted as a flag; the quotes are in the runs.`
-      : `Disputed: one of the two checks found ${j.anyRunFlag === 'A' ? 'a stated fix' : 'a pointer to the fix'}, the other found nothing. Not counted as a flag; the quote is in the runs.`;
+    v = disputedSentence(j.anyRunFlag, j.runs.length, 'in the runs');
   } else if (state === 'rule_clear') {
     v = 'No rule matched: no added patch line appears in the text and the fix pull request is not linked. The text was not read by a model (add --judge for Tier A/B).';
   } else if (state === 'link') {
