@@ -43,6 +43,7 @@ export function makeClient({ baseUrl, model, apiKey, effort = false, timeoutMs =
         if (mode === sent) mode = down;
         continue;
       }
+      if (res.status === 400 && effort && /reasoning/i.test(text)) throw new JudgeError(`${url} refused reasoning_effort (HTTP 400): this model does not take it. Run again with --no-reasoning-effort (the run is then labelled m1.1-no-effort, not the published procedure)`);
       if (res.status === 401 || res.status === 403) throw new JudgeError(`${url} refused the key (HTTP ${res.status}); set LEAKLENS_API_KEY or OPENAI_API_KEY`);
       if (!res.ok) throw new JudgeError(`${url} answered HTTP ${res.status}: ${text.slice(0, 200)}`);
       let j;

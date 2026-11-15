@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseResolved, rescore, guessBenchmark, citation, tableRow, RescoreInputError } from '../src/rescore.mjs';
+import { parseResolved, rescore, guessBenchmark, guessNote, inputNotes, citation, tableRow, RescoreInputError } from '../src/rescore.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const FLAGS = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/headline-flags.json'), 'utf8'));
@@ -114,4 +114,53 @@ test('bad input says what is wrong and exits 2', async () => {
   assert.match(r2.stderr, /unknown benchmark "pro"/);
   const r3 = await run(['rescore']);
   assert.equal(r3.code, 2);
+});
+
+// BEN-346: a status next to each ID is read (only resolved rows count) or refused; dropped words are counted; a worked-out
+// benchmark that the IDs also fit is named.
+test('status next to each ID: CSV column, PASSED/FAILED lines, harness enum; mixed lines refused; dropped words counted', () => {
+  const OK = 'django__django-11099', BAD = 'astropy__astropy-12907';
+  for (const text of [`instance_id,resolved\n${OK},True\n${BAD},False\n`, `instance_id\tmodel\tstatus\n${OK}\tm\tRESOLVED_FULL\n${BAD}\tm\tRESOLVED_NO\n`,
+    `model,instance_id,resolved,cost\n"a, b",${OK},1,0.3\n"a, b",${BAD},0,0.2\n`, `${OK} PASSED\n${BAD} FAILED\n`, `${OK}: true\n${BAD}: false\n`]) {
+    const p = parseResolved(text);
+    assert.deepEqual(p.ids, [OK], text); assert.equal(p.notResolved, 1, text);
+  }
+  assert.throws(() => parseResolved(`${OK} PASSED\n${BAD}\n`), (e) => e instanceof RescoreInputError && /line 1 has a status.*line 2 \(astropy__astropy-12907\) has none/.test(e.message));
+  assert.throws(() => parseResolved(`instance_id,resolved\n${OK},maybe\n`), (e) => e instanceof RescoreInputError && /"maybe" in the "resolved" column is not a status/.test(e.message));
+  assert.throws(() => parseResolved(`${OK}, ${BAD} FAILED\n`), (e) => e instanceof RescoreInputError && /several IDs and the status "FAILED"/.test(e.message));
+  const numbered = parseResolved(`1) ${OK}\n2) ${BAD}\n`);
+  assert.deepEqual(numbered.ids, [OK, BAD], 'a numbered list is not a status');
+  const plain = parseResolved(`instance_id\n${OK}\n${BAD}\nfoo bar\n`);
+  assert.deepEqual([plain.ids.length, plain.ignored, plain.format], [2, 3, 'id list']);
+  assert.deepEqual(inputNotes(plain), ['3 other words were ignored (instance_id, foo, bar).']);
+});
+
+test('a worked-out benchmark the IDs also fit is named (page and CLI); a full Lite run still resolves to Lite', async () => {
+  const v = new Set(FLAGS.benchmarks['swe-bench-verified'].tasks), lite = FLAGS.benchmarks['swe-bench-lite'].tasks;
+  const both = lite.filter((i) => v.has(i)).slice(0, 5);
+  const r = rescore(both, FLAGS);
+  assert.equal(r.benchmark, 'swe-bench-verified');
+  assert.equal(guessNote(r, 'page'), 'Worked out as Verified; these IDs also fit Lite. Choose the benchmark above if that is wrong.');
+  assert.equal(guessNote(rescore(both, FLAGS, 'verified'), 'page'), '', 'chosen: no note');
+  const full = rescore(lite, FLAGS);
+  assert.equal(full.benchmark, 'swe-bench-lite'); assert.equal(guessNote(full), '');
+  const cli = await run(['rescore', '-'], both.join('\n'));
+  assert.equal(cli.code, 0, cli.stderr);
+  assert.match(cli.stdout, /Worked out as Verified; these IDs also fit Lite\. Add --benchmark lite if that is wrong\./);
+  const csv = await run(['rescore', '-'], `instance_id,resolved\ndjango__django-11099,True\nastropy__astropy-12907,False\n`);
+  assert.match(csv.stderr, /read 1 resolved ID \(CSV "resolved" column\)/); assert.match(csv.stderr, /1 ID was marked not resolved and not counted\./);
+  assert.match(csv.stdout, /All 500 tasks\s+0\.2%/);
+});
+
+test('the same ID with two disagreeing statuses is refused and named (lines, CSV, JSON, JSONL); agreeing repeats count once; a predictions CSV is refused', () => {
+  const A = 'django__django-11099', B = 'astropy__astropy-12907';
+  const refuses = (text, re) => assert.throws(() => parseResolved(text), (e) => e instanceof RescoreInputError && re.test(e.message));
+  refuses(`${A} PASSED\n${A} FAILED\n`, new RegExp(`${A} is marked resolved on line 1 and not resolved on line 2`));
+  refuses(`instance_id,resolved\n${A},False\n${B},True\n${A},True\n`, new RegExp(`${A} is marked not resolved on line 2 and resolved on line 4`));
+  refuses(JSON.stringify([{ instance_id: A, resolved: true }, { instance_id: A, resolved: false }]), /item 1 and not resolved on item 2/);
+  refuses(`{"instance_id":"${A}","resolved":true}\n\n{"instance_id":"${A}","resolved":false}\n`, /line 1 and not resolved on line 3/);
+  refuses(`${A} PASSED\n${A} FAILED\n${B} PASSED\n${B} FAILED\n`, /\(and 1 other ID: astropy__astropy-12907\)/);
+  const same = parseResolved(`${A} PASSED\n${A} PASSED\n${B} FAILED\n${B} FAILED\n`);
+  assert.deepEqual(same.ids, [A]); assert.equal(same.notResolved, 1);
+  refuses(`instance_id,model_patch\n${A},"diff --git a/x b/x"\n`, /"model_patch" column and no status column: this looks like a predictions file/);
 });

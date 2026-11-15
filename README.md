@@ -11,18 +11,20 @@ node bin/leaklens.mjs check fixtures/swe-bench-verified-10.jsonl --out out    # 
 diff -r out fixtures/expected && echo "same as fixtures/expected"            # byte-for-byte the checked-in result
 node bin/leaklens.mjs check tasks.jsonl --out my-out                          # your benchmark file (SWE-bench JSONL or a JSON array)
 node bin/leaklens.mjs check tasks.jsonl --out my-out --repos ~/src            # adds the upstream fix commit and its date from your clones
-LEAKLENS_API_KEY="$YOUR_KEY" node bin/leaklens.mjs check tasks.jsonl --out my-out --judge --model "$MODEL"   # Tier A/B on your key
+LEAKLENS_API_KEY="$YOUR_KEY" node bin/leaklens.mjs check tasks.jsonl --out my-out --judge --model "$MODEL"   # Tier A/B on your key, the published m1.1 procedure
 node bin/leaklens.mjs check tasks.jsonl --out my-out --judge --base-url http://localhost:11434/v1 --model "$MODEL"   # or a local model
 ```
 
-The first line prints this (also written to `out/summary.md`; per-task evidence is in `out/results.jsonl`):
+The first line prints this (also written to `out/summary.md`; per-task evidence is in `out/results.jsonl`). The bold line counts only what was measured: without `--judge` that is Tier C. The line under it is the Leaklens public table's count for the same task IDs (Tier A where both checks agreed, or Tier C), read from `data/headline-flags.json`; it is left out when none of your IDs are in the table.
 
 ```markdown
 # Leaklens check: swe-bench-verified-10.jsonl
 
 Methodology m1.1 · 10 tasks · deterministic rules only, no network and no model (add `--judge` for Tier A/B)
 
-**5 of 10 tasks flagged (50%).**
+**5 of 10 tasks (50%): gold-patch lines in the issue or discussion (Tier C). Tier A/B not read.**
+
+Leaklens public table for these 10 tasks: 6 flagged (Tier A where both checks agreed, or Tier C), methodology m1.1, as of 2026-11-08: https://leaklens.grain64.com/benchmarks/swe-bench-verified
 
 | Signal | Tasks |
 |---|---|
@@ -55,7 +57,7 @@ Tier and state definitions: DEFINITIONS.md, or https://leaklens.grain64.com/meth
 
 ```sh
 node bin/leaklens.mjs rescore fixtures/rescore/20251205_sonar-foundation-agent_claude-opus-4-5.json   # a public leaderboard entry
-node bin/leaklens.mjs rescore results.json --label "my-agent"       # results.json ("resolved"), sb-cli report ("resolved_ids"), report.json, JSONL or an ID list
+node bin/leaklens.mjs rescore results.json --label "my-agent"       # results.json ("resolved"), sb-cli report ("resolved_ids"), report.json, JSONL, an ID list, or a CSV/list with a status per ID
 node bin/leaklens.mjs rescore lite-ids.txt --benchmark lite --json  # Lite; numbers as JSON
 ```
 
@@ -79,7 +81,7 @@ IDs that are not in the benchmark are listed and left out of every count. A fix 
 - **Links the fix PR**: the text links the pull request whose change is the gold patch. Its own signal; it does not change the tier.
 - **Fix commit date** (`--repos`): when the upstream fix was committed. Shown, never scored.
 
-Tier A and B come from two differently worded model checks (`--judge`). Every quote is checked word for word against the task text, and a tier counts only when both checks agree; with `--tiebreak` a third check settles splits. Tasks where the checks differ are marked `disputed`, never `clear`. A flag is a finding about the text and history. It never says a model was trained on a task or memorised it.
+Tier A and B come from two differently worded model checks (`--judge`). Every quote is checked word for word against the task text, and a tier counts only when both checks agree; a third check settles splits. Tasks where the checks differ are marked `disputed`, never `clear`. A flag is a finding about the text and history. It never says a model was trained on a task or memorised it.
 
 [DEFINITIONS.md](DEFINITIONS.md) has every tier and state. It is generated from `src/definitions.mjs`, the same file the tier table on https://leaklens.grain64.com/methodology is built from; the judge prompts (`src/prompts.mjs`) and rules (`src/rules.mjs`) are the ones the hosted tables run.
 
@@ -97,7 +99,7 @@ Input: one task per line (or a JSON array) with `instance_id`, `problem_statemen
 
 Output, in `--out` (default `leaklens-out`): `results.jsonl`, one row per task in input order (tier, state, verdict, matched patch lines, fix-PR link with offsets, fix commit, every judge check with its quotes and offsets), and `summary.md`. No timestamps or paths, so the same input gives the same bytes.
 
-`--judge` makes two model calls per task (a third on splits with `--tiebreak`; never on Tier C tasks), four tasks at a time (`--concurrency`). The key is read from `LEAKLENS_API_KEY` or `OPENAI_API_KEY` and only sent to the endpoint you choose; a local server needs none. If a call fails, finished tasks are kept in `results.jsonl` and the next run resumes from them.
+`--judge` runs the published m1.1 procedure, the one behind the Leaklens tables: two checks (reasoning effort low, then medium) and a third on splits that Tier C does not settle, so two or three model calls per task, four tasks at a time (`--concurrency`). `--judge --model <model>` is all it takes to reproduce the table's method; the difference that remains is your model. `--no-tiebreak` saves the third call and `--no-reasoning-effort` is for models that refuse that field; either way the run is labelled with what ran (`procedure` on every row and in the summary: `m1.1`, `m1.1-no-tiebreak`, `m1.1-no-effort`), and a rerun only reuses rows judged with the same model and procedure. The key is read from `LEAKLENS_API_KEY` or `OPENAI_API_KEY` and only sent to the endpoint you choose; a local server needs none. If a call fails, finished tasks are kept in `results.jsonl` and the next run resumes from them.
 
 ## Tests
 

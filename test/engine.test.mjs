@@ -35,7 +35,11 @@ test('deterministic check: output is byte-for-byte fixtures/expected', async () 
   const r = await run(['check', 'fixtures/swe-bench-verified-10.jsonl', '--out', out]);
   assert.equal(r.code, 0, r.stderr);
   for (const f of ['results.jsonl', 'summary.md']) assert.equal(read(path.join(out, f)), read(path.join(ROOT, 'fixtures/expected', f)), f);
-  assert.match(r.stdout, /5 of 10 tasks flagged/);
+  // the bold line names what was measured, and the published count for the same tasks follows it
+  assert.match(r.stdout, /\*\*5 of 10 tasks \(50%\): gold-patch lines in the issue or discussion \(Tier C\)\. Tier A\/B not read\.\*\*/);
+  assert.doesNotMatch(r.stdout, /tasks flagged/);
+  assert.match(r.stdout, /Leaklens public table for these 10 tasks: 6 flagged \(Tier A where both checks agreed, or Tier C\), methodology m1\.1, as of 2026-11-08: https:\/\/leaklens\.grain64\.com\/benchmarks\/swe-bench-verified/);
+  assert.ok(rows(out).every((x) => x.procedure === 'rules'));
 });
 
 test('deterministic check: Tier C and fix-PR links equal the stored live verdicts on all 10 tasks', async () => {
@@ -75,6 +79,75 @@ test('--judge (recorded answers, local stub): byte-for-byte fixtures/expected-ju
   assert.ok(stub.requests.every((q) => q.body.response_format.type === 'json_schema' && q.body.model === 'recorded'));
 });
 
+test('--judge alone runs the published m1.1 procedure; --no-tiebreak and --no-reasoning-effort are named on every row and in the summary', async () => {
+  // default: the same bytes as --judge --tiebreak (fixtures/expected-judged), reasoning effort low then medium, a third check on the split
+  const stub = await startStub();
+  const out = tmp();
+  const r = await run(['check', 'fixtures/swe-bench-verified-10.jsonl', '--judge', '--model', 'recorded', '--base-url', stub.url, '--out', out, '--quiet']);
+  await stub.close();
+  assert.equal(r.code, 0, r.stderr);
+  for (const f of ['results.jsonl', 'summary.md']) assert.equal(read(path.join(out, f)), read(path.join(ROOT, 'fixtures/expected-judged', f)), f);
+  assert.equal(stub.requests.length, 21);
+  assert.deepEqual([...new Set(stub.requests.map((q) => q.body.reasoning_effort))].sort(), ['low', 'medium']);
+  assert.ok(rows(out).every((x) => x.procedure === 'm1.1'));
+  const md = read(path.join(out, 'summary.md'));
+  assert.match(md, /with the published m1\.1 procedure: two checks \(reasoning effort low, then medium\) and a third on splits/);
+  assert.match(md, /\*\*7 of 10 tasks flagged \(70%\): Tier A or B read by `recorded`, or Tier C by rule\.\*\*/);
+  assert.match(md, /Leaklens public table for these 10 tasks: 6 flagged/);
+
+  // --no-tiebreak: two calls a task, labelled, and a rerun with the default procedure does not reuse those rows
+  const s2 = await startStub();
+  const out2 = tmp();
+  const r2 = await run(['check', 'fixtures/swe-bench-verified-10.jsonl', '--judge', '--no-tiebreak', '--model', 'recorded', '--base-url', s2.url, '--out', out2, '--quiet']);
+  await s2.close();
+  assert.equal(r2.code, 0, r2.stderr);
+  assert.equal(s2.requests.length, 20);
+  assert.ok(rows(out2).every((x) => x.procedure === 'm1.1-no-tiebreak'));
+  assert.match(read(path.join(out2, 'summary.md')), /no third check on splits \(--no-tiebreak\): not the published m1\.1 procedure/);
+  const s3 = await startStub();
+  const r3 = await run(['check', 'fixtures/swe-bench-verified-10.jsonl', '--judge', '--model', 'recorded', '--base-url', s3.url, '--out', out2]);
+  await s3.close();
+  assert.equal(r3.code, 0, r3.stderr);
+  assert.doesNotMatch(r3.stderr, /reusing/);
+  assert.equal(s3.requests.length, 21, 'rows from another procedure are judged again');
+
+  // --no-reasoning-effort: no reasoning_effort is sent
+  const s4 = await startStub();
+  const out4 = tmp();
+  const r4 = await run(['check', 'fixtures/swe-bench-verified-10.jsonl', '--judge', '--no-reasoning-effort', '--model', 'recorded', '--base-url', s4.url, '--out', out4, '--quiet']);
+  await s4.close();
+  assert.equal(r4.code, 0, r4.stderr);
+  assert.ok(s4.requests.every((q) => !('reasoning_effort' in q.body)));
+  assert.ok(rows(out4).every((x) => x.procedure === 'm1.1-no-effort'));
+
+  // contradictions and flags without --judge are input errors, before any call
+  for (const [args, msg] of [
+    [['--judge', '--tiebreak', '--no-tiebreak'], /--tiebreak and --no-tiebreak contradict each other/],
+    [['--judge', '--reasoning-effort', '--no-reasoning-effort'], /--reasoning-effort and --no-reasoning-effort contradict each other/],
+    [['--no-tiebreak'], /--no-tiebreak needs --judge/],
+  ]) {
+    const e = await run(['check', 'fixtures/swe-bench-verified-10.jsonl', ...args, '--model', 'recorded', '--base-url', 'http://127.0.0.1:9/v1', '--out', tmp()]);
+    assert.equal(e.code, 2, args.join(' '));
+    assert.match(e.stderr, msg);
+  }
+});
+
+test('the published line counts the tasks of the input that are in the table, and is left out when none are', async () => {
+  const dir = tmp();
+  const lines = read(FIXTURE).trim().split('\n');
+  const some = path.join(dir, 'some.jsonl');
+  const renamed = lines.slice(0, 2).map((l, i) => { const t = JSON.parse(l); t.instance_id = t.instance_id.replace(/-\d+$/, `-99999${i}`); return JSON.stringify(t); });
+  fs.writeFileSync(some, [...lines.slice(0, 3), ...renamed].join('\n') + '\n');
+  const r = await run(['check', some, '--out', path.join(dir, 'o1')]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /Leaklens public table for the 3 of these tasks in SWE-bench Verified: \d+ flagged/);
+  const none = path.join(dir, 'none.jsonl');
+  fs.writeFileSync(none, renamed.join('\n') + '\n');
+  const r2 = await run(['check', none, '--out', path.join(dir, 'o2')]);
+  assert.equal(r2.code, 0, r2.stderr);
+  assert.doesNotMatch(r2.stdout, /public table/);
+});
+
 test('--judge keeps finished tasks when the endpoint fails, and the next run resumes from them', async () => {
   const out = tmp();
   const bad = await startStub({ failAfter: 6 });
@@ -89,7 +162,8 @@ test('--judge keeps finished tasks when the endpoint fails, and the next run res
   await good.close();
   assert.equal(r2.code, 0, r2.stderr);
   assert.match(r2.stderr, /reusing 3 tasks/);
-  assert.equal(good.requests.length, 14, 'only the 7 unfinished tasks were judged');
+  // 7 unfinished tasks x 2 checks, plus the default third check on the one split among them
+  assert.equal(good.requests.length, 15, 'only the 7 unfinished tasks were judged');
   assert.equal(rows(out).length, 10);
 });
 

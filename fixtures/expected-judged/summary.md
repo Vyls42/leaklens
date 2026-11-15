@@ -1,8 +1,10 @@
 # Leaklens check: swe-bench-verified-10.jsonl
 
-Methodology m1.1 · 10 tasks · judged by `recorded` (two checks and a third on splits)
+Methodology m1.1 · 10 tasks · judged by `recorded` with the published m1.1 procedure: two checks (reasoning effort low, then medium) and a third on splits, as on the Leaklens tables
 
-**7 of 10 tasks flagged (70%).**
+**7 of 10 tasks flagged (70%): Tier A or B read by `recorded`, or Tier C by rule.**
+
+Leaklens public table for these 10 tasks: 6 flagged (Tier A where both checks agreed, or Tier C), methodology m1.1, as of 2026-11-08: https://leaklens.grain64.com/benchmarks/swe-bench-verified
 
 | Signal | Tasks |
 |---|---|

@@ -6,8 +6,8 @@ import { readTasks, InputError } from '../src/input.mjs';
 import { checkAll } from '../src/check.mjs';
 import { makeClient, JudgeError } from '../src/judge.mjs';
 import { toJsonl, summary } from '../src/report.mjs';
-import { METHODOLOGY_VERSION } from '../src/definitions.mjs';
-import { parseResolved, rescore, report, RescoreInputError } from '../src/rescore.mjs';
+import { METHODOLOGY_VERSION, procedureOf } from '../src/definitions.mjs';
+import { parseResolved, rescore, report, inputNotes, RescoreInputError } from '../src/rescore.mjs';
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -26,15 +26,17 @@ Options:
   --out <dir>          where results.jsonl and summary.md go (default: leaklens-out)
   --repos <dir>        local git clones (owner_name.git, owner_name, name or owner/name under <dir>,
                        or <dir> itself): adds the upstream fix commit and its date. No network.
-  --judge              add Tier A/B: two differently worded model checks with the verbatim-quote check,
-                       on your own OpenAI-compatible endpoint
+  --judge              add Tier A/B on your own OpenAI-compatible endpoint, with the published m1.1
+                       procedure: two differently worded checks (reasoning effort low, then medium),
+                       a third on splits, every quote checked word for word. 2-3 calls a task
   --model <name>       model for --judge (or LEAKLENS_MODEL)
   --base-url <url>     endpoint for --judge (or LEAKLENS_BASE_URL / OPENAI_BASE_URL;
                        default https://api.openai.com/v1; a local server such as
                        http://localhost:11434/v1 needs no key)
                        key: LEAKLENS_API_KEY or OPENAI_API_KEY (read from the environment, never printed)
-  --tiebreak           with --judge: run the m1.1 third check on tasks where the first two split
-  --reasoning-effort   with --judge: send reasoning_effort low/medium, as on the Leaklens tables
+  --no-tiebreak        with --judge: skip the third check (2 calls a task; labelled m1.1-no-tiebreak)
+  --no-reasoning-effort  with --judge: do not send reasoning_effort, for models that refuse it
+                       (labelled m1.1-no-effort). --tiebreak and --reasoning-effort are the default
   --concurrency <n>    parallel tasks with --judge (default 4)
   --fresh              with --judge: re-judge tasks already in <out>/results.jsonl
   --quiet              print nothing but errors
@@ -66,7 +68,7 @@ function parseArgs(argv) {
         const val = v !== undefined ? v : argv[++i];
         if (val === undefined || val.startsWith('--')) throw new InputError(`--${k} needs a value`);
         o[k] = val;
-      } else if (['judge', 'tiebreak', 'reasoning-effort', 'fresh', 'quiet', 'json'].includes(k)) o[k] = true;
+      } else if (['judge', 'tiebreak', 'reasoning-effort', 'no-tiebreak', 'no-reasoning-effort', 'fresh', 'quiet', 'json'].includes(k)) o[k] = true;
       else throw new InputError(`unknown option --${k} (see leaklens --help)`);
     } else o._.push(a);
   }
@@ -82,7 +84,11 @@ async function main() {
   if (cmd !== 'check') throw new InputError(`unknown command "${cmd}" (try: leaklens check <benchmark.jsonl> or leaklens rescore <results>)`);
   if (!file) throw new InputError('leaklens check needs a benchmark file');
   if (extra.length) throw new InputError(`unexpected argument "${extra[0]}"`);
-  if (o.tiebreak && !o.judge) throw new InputError('--tiebreak needs --judge');
+  for (const k of ['tiebreak', 'no-tiebreak', 'reasoning-effort', 'no-reasoning-effort']) if (o[k] && !o.judge) throw new InputError(`--${k} needs --judge`);
+  if (o.tiebreak && o['no-tiebreak']) throw new InputError('--tiebreak and --no-tiebreak contradict each other');
+  if (o['reasoning-effort'] && o['no-reasoning-effort']) throw new InputError('--reasoning-effort and --no-reasoning-effort contradict each other');
+  const tiebreak = !o['no-tiebreak'], effort = !o['no-reasoning-effort'];
+  const procedure = procedureOf({ judged: !!o.judge, tiebreak, effort });
   if (o.repos && !fs.existsSync(o.repos)) throw new InputError(`--repos ${o.repos}: no such directory`);
   const tasks = readTasks(file);
   const outDir = o.out || 'leaklens-out';
@@ -97,8 +103,8 @@ async function main() {
     const baseUrl = o['base-url'] || process.env.LEAKLENS_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
     const apiKey = process.env.LEAKLENS_API_KEY || process.env.OPENAI_API_KEY || '';
     if (!apiKey && /api\.openai\.com/.test(baseUrl)) throw new InputError('--judge on api.openai.com needs a key in LEAKLENS_API_KEY or OPENAI_API_KEY');
-    client = makeClient({ baseUrl, model, apiKey, effort: !!o['reasoning-effort'] });
-    log(`judging ${tasks.length} tasks with ${model} at ${baseUrl}: ${o.tiebreak ? '2-3' : '2'} model calls per task`);
+    client = makeClient({ baseUrl, model, apiKey, effort });
+    log(`judging ${tasks.length} tasks with ${model} at ${baseUrl}: ${tiebreak ? '2-3' : '2'} model calls per task (${procedure})`);
   }
 
   // A judged run resumes: tasks already judged with the same model and options in <out>/results.jsonl are reused.
@@ -111,15 +117,14 @@ async function main() {
       try {
         const r = JSON.parse(l);
         const sameRepos = !!r.fix_commit === !!o.repos;
-        const tbDone = !o.tiebreak || r.agreement !== 'split' || (r.judge && r.judge.runs.length >= 3);
-        if (r.judge && r.judge.model === model && sameRepos && tbDone) reuse.set(r.instance_id, r);
+        if (r.judge && r.judge.model === model && sameRepos && r.procedure === procedure) reuse.set(r.instance_id, r);
       } catch {}
     }
     if (reuse.size) log(`reusing ${reuse.size} tasks already judged in ${prev} (--fresh to re-judge)`);
   }
 
   let done = 0;
-  const { rows, error } = await checkAll(tasks, { reposDir: o.repos || null, client, tiebreak: !!o.tiebreak, concurrency: o.concurrency ? parseInt(o.concurrency, 10) : 4, reuse }, (i, r, reused) => {
+  const { rows, error } = await checkAll(tasks, { reposDir: o.repos || null, client, tiebreak: !!client && tiebreak, effort: !!client && effort, concurrency: o.concurrency ? parseInt(o.concurrency, 10) : 4, reuse }, (i, r, reused) => {
     done++;
     if (client || o.repos) log(`[${done}/${tasks.length}] ${r.instance_id}: ${r.tier} ${r.state}${reused ? ' (reused)' : ''}`);
   });
@@ -135,7 +140,9 @@ async function main() {
     throw new JudgeError(error.message + kept);
   }
   fs.writeFileSync(path.join(outDir, 'results.jsonl'), toJsonl(rows));
-  const md = summary(rows, { input: path.basename(file), judged: client ? (o.tiebreak ? 'tiebreak' : 'two') : null, model, repos: !!o.repos });
+  let flags = null;
+  try { flags = JSON.parse(fs.readFileSync(o.flags || new URL('../data/headline-flags.json', import.meta.url), 'utf8')); } catch (e) { if (o.flags) throw new InputError(`cannot read the flag file ${o.flags}: ${e.code || e.message}`); }
+  const md = summary(rows, { input: path.basename(file), judged: !!client, model, repos: !!o.repos, flags, procedure });
   fs.writeFileSync(path.join(outDir, 'summary.md'), md);
   if (!o.quiet) {
     process.stdout.write(md);
@@ -154,8 +161,11 @@ function rescoreCmd(o, file, extra) {
   try { flags = JSON.parse(fs.readFileSync(flagsFile, 'utf8')); } catch (e) { throw new InputError(`cannot read the flag file ${flagsFile}: ${e.code || e.message}`); }
   const parsed = parseResolved(text);
   const r = rescore(parsed.ids, flags, o.benchmark);
-  if (o.json) return console.log(JSON.stringify({ ...r, input: { format: parsed.format, ids: parsed.ids.length } }, null, 2));
-  if (!o.quiet) process.stderr.write(`read ${parsed.ids.length} resolved IDs (${parsed.format}) from ${file === '-' ? 'standard input' : path.basename(file)}\n`);
+  if (o.json) return console.log(JSON.stringify({ ...r, input: { format: parsed.format, ids: parsed.ids.length, notResolved: parsed.notResolved, ignored: parsed.ignored } }, null, 2));
+  if (!o.quiet) {
+    process.stderr.write(`read ${parsed.ids.length} resolved ID${parsed.ids.length === 1 ? '' : 's'} (${parsed.format}) from ${file === '-' ? 'standard input' : path.basename(file)}\n`);
+    for (const n of inputNotes(parsed)) process.stderr.write(n + '\n');
+  }
   console.log(report(r, o.label));
 }
 

@@ -3,6 +3,20 @@
 
 export const METHODOLOGY_VERSION = 'm1.1';
 
+// The procedure a run actually used (BEN-349 item 4). 'm1.1' is the published one, the same as the Leaklens tables and the
+// hosted audit: check 1 at reasoning effort low, check 2 at medium, a third check at medium on splits Tier C does not settle.
+export function procedureOf({ judged, tiebreak = true, effort = true }) {
+  if (!judged) return 'rules';
+  return 'm1.1' + (tiebreak ? '' : '-no-tiebreak') + (effort ? '' : '-no-effort');
+}
+export const PROCEDURE_TEXT = {
+  rules: 'deterministic rules only, no network and no model (add `--judge` for Tier A/B)',
+  'm1.1': 'the published m1.1 procedure: two checks (reasoning effort low, then medium) and a third on splits, as on the Leaklens tables',
+  'm1.1-no-tiebreak': 'two checks (reasoning effort low, then medium), no third check on splits (--no-tiebreak): not the published m1.1 procedure',
+  'm1.1-no-effort': 'two checks and a third on splits, no reasoning effort sent (--no-reasoning-effort): not the published m1.1 procedure',
+  'm1.1-no-tiebreak-no-effort': 'two checks, no third check and no reasoning effort sent (--no-tiebreak --no-reasoning-effort): not the published m1.1 procedure',
+};
+
 // Evidence tiers, strongest first. `model: true` means the tier needs the judge (--judge); the others are deterministic.
 export const TIERS = [
   {

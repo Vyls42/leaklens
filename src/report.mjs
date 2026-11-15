@@ -1,12 +1,28 @@
 // results.jsonl (one row per task, input order) and summary.md. No timestamps or paths, so the same input gives the same bytes.
-import { METHODOLOGY_VERSION, WORDING } from './definitions.mjs';
+import { METHODOLOGY_VERSION, WORDING, PROCEDURE_TEXT } from './definitions.mjs';
 
 export const toJsonl = (rows) => rows.map((r) => JSON.stringify(r)).join('\n') + '\n';
 
 const cell = (s) => String(s).replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 
-export function summary(rows, { input, judged, model, repos }) {
+// The published count for the same tasks (BEN-349 item 3): when the input's IDs are in the Leaklens flag file, one line says
+// what the public table counts for them, so the bold line of a rules-only run is never read as "Leaklens says".
+export function publishedLine(rows, flags) {
+  if (!flags || !flags.benchmarks) return null;
+  const ids = rows.map((r) => r.instance_id);
+  let best = null;
+  for (const [slug, b] of Object.entries(flags.benchmarks)) {
+    const all = new Set(b.tasks), fl = new Set(b.flagged);
+    const inIt = ids.filter((id) => all.has(id));
+    if (inIt.length && (!best || inIt.length > best.n)) best = { slug, b, n: inIt.length, flagged: inIt.filter((id) => fl.has(id)).length };
+  }
+  if (!best) return null;
+  const which = best.n === ids.length ? `these ${best.n === 1 ? 'task' : best.n + ' tasks'}` : `the ${best.n} of these tasks in ${best.b.name}`;
+  return `Leaklens public table for ${which}: ${best.flagged} flagged (Tier A where both checks agreed, or Tier C), methodology ${best.b.methodologyVersion}, as of ${best.b.asOf}: ${flags.source || 'https://leaklens.grain64.com'}/benchmarks/${best.slug}`;
+}
+
+export function summary(rows, { input, judged, model, repos, flags, procedure = judged ? 'm1.1' : 'rules' }) {
   const n = rows.length;
   const count = (f) => rows.filter(f).length;
   const tiers = { A: count((r) => r.tier === 'A'), B: count((r) => r.tier === 'B'), C: count((r) => r.tier === 'C') };
@@ -15,10 +31,14 @@ export function summary(rows, { input, judged, model, repos }) {
   const L = [];
   L.push(`# Leaklens check: ${input}`);
   L.push('');
-  L.push(`Methodology ${METHODOLOGY_VERSION} · ${n} task${n === 1 ? '' : 's'} · ${judged ? `judged by \`${model}\` (two checks${judged === 'tiebreak' ? ' and a third on splits' : ''})` : 'deterministic rules only, no network and no model (add `--judge` for Tier A/B)'}`);
+  L.push(`Methodology ${METHODOLOGY_VERSION} · ${n} task${n === 1 ? '' : 's'} · ${judged ? `judged by \`${model}\` with ` : ''}${PROCEDURE_TEXT[procedure]}`);
   L.push('');
-  L.push(`**${flagged} of ${n} tasks flagged${pct(flagged)}.**`);
+  L.push(judged
+    ? `**${flagged} of ${n} tasks flagged${pct(flagged)}: Tier A or B read by \`${model}\`, or Tier C by rule.**`
+    : `**${tiers.C} of ${n} tasks${pct(tiers.C)}: gold-patch lines in the issue or discussion (Tier C). Tier A/B not read.**`);
   L.push('');
+  const pub = publishedLine(rows, flags);
+  if (pub) { L.push(pub); L.push(''); }
   L.push('| Signal | Tasks |');
   L.push('|---|---|');
   if (judged) {

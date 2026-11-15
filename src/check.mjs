@@ -1,46 +1,11 @@
 // One task in, one result row out. Deterministic tiers always; the fix commit when a clone is given; the judged tier on request.
-import { overlap, isFlag, linkSignal, verdictSentence, tiebreakVerdict } from './rules.mjs';
-import { METHODOLOGY_VERSION } from './definitions.mjs';
+import { overlap, isFlag, linkSignal, finalTier, stateOf, verdictOf } from './rules.mjs';
+export { finalTier, stateOf, verdictOf };
+import { METHODOLOGY_VERSION, procedureOf } from './definitions.mjs';
 import { findClone, fixCommit } from './gitdate.mjs';
 import { judgeTask } from './judge.mjs';
 
-const SOURCE_WORD = { issue: 'The issue text', discussion: 'The discussion' };
-
-// Same reading as the Leaklens task pages: tier A only when the checks agree (or a third settles it); C outranks B.
-export function finalTier(ov, j) {
-  if (!j) return ov ? 'C' : 'none';
-  if (j.modelTier === 'A' && (j.agreement === 'agreed' || j.agreement === 'tiebreak')) return 'A';
-  if (ov) return 'C';
-  return j.modelTier === 'B' ? 'B' : 'none';
-}
-
-export function stateOf(tier, j, link) {
-  if (tier === 'A' || tier === 'B' || tier === 'C') return 'flag';
-  if (!j) return link ? 'link' : 'rule_clear';
-  if (j.anyRunFlag && j.agreement !== 'tiebreak') return 'disputed';
-  return link ? 'link' : 'clear';
-}
-
-function verdictOf(tier, state, j, ov, link) {
-  let v;
-  if (state === 'disputed') {
-    v = j.runs.length >= 3
-      ? `Disputed after three checks: they did not agree on one reading, and at least one found ${j.anyRunFlag === 'A' ? 'a stated fix' : 'a pointer to the fix'}. Not counted as a flag; the quotes are in the runs.`
-      : `Disputed: one of the two checks found ${j.anyRunFlag === 'A' ? 'a stated fix' : 'a pointer to the fix'}, the other found nothing. Not counted as a flag; the quote is in the runs.`;
-  } else if (state === 'rule_clear') {
-    v = 'No rule matched: no added patch line appears in the text and the fix pull request is not linked. The text was not read by a model (add --judge for Tier A/B).';
-  } else if (state === 'link') {
-    v = '';
-  } else if (j && j.agreement === 'tiebreak' && (tier === 'A' || tier === 'B')) {
-    v = tiebreakVerdict(j.decision, tier, j.shown.length ? j.shown[0].text : null);
-  } else {
-    v = verdictSentence(tier, j ? j.agreement : 'n/a', j && j.shown.length ? j.shown[0].text : null, { matched: ov.matched_line_count, total: ov.patch_line_count });
-  }
-  if (link && (state === 'link' || state === 'disputed')) v = (v ? v + ' ' : '') + `${SOURCE_WORD[link.source]} links the pull request that is the fix.`;
-  return v;
-}
-
-export async function checkTask(task, { reposDir = null, client = null, tiebreak = false } = {}) {
+export async function checkTask(task, { reposDir = null, client = null, tiebreak = false, effort = true } = {}) {
   const ov = overlap(task.patch, task.issue, task.hints);
   const ovFlag = isFlag(ov);
   const l = linkSignal(task.repo, task.pr_number, task.issue, task.hints);
@@ -67,6 +32,7 @@ export async function checkTask(task, { reposDir = null, client = null, tiebreak
     fix_commit: fix,
     judge: j ? { model_tier: j.modelTier, any_check_flagged: j.anyRunFlag, runs: j.runsOut } : null,
     methodology_version: METHODOLOGY_VERSION,
+    procedure: procedureOf({ judged: !!client, tiebreak, effort }),
   };
 }
 

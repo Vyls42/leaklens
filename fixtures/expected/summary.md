@@ -2,7 +2,9 @@
 
 Methodology m1.1 · 10 tasks · deterministic rules only, no network and no model (add `--judge` for Tier A/B)
 
-**5 of 10 tasks flagged (50%).**
+**5 of 10 tasks (50%): gold-patch lines in the issue or discussion (Tier C). Tier A/B not read.**
+
+Leaklens public table for these 10 tasks: 6 flagged (Tier A where both checks agreed, or Tier C), methodology m1.1, as of 2026-11-08: https://leaklens.grain64.com/benchmarks/swe-bench-verified
 
 | Signal | Tasks |
 |---|---|
