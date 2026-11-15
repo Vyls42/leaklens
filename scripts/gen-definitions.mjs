@@ -2,7 +2,7 @@
 // usage: node scripts/gen-definitions.mjs [--check]   (--check exits 1 when DEFINITIONS.md is out of date)
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { TIERS, STATES, WORDING, METHODOLOGY_VERSION } from '../src/definitions.mjs';
+import { TIERS, STATES, WORDING, PRECEDENCE, METHODOLOGY_VERSION } from '../src/definitions.mjs';
 
 export function render() {
   const cell = (s) => s.replace(/\|/g, '\\|');
@@ -16,6 +16,8 @@ export function render() {
     '| Tier | Meaning | How it is produced | Needs `--judge` |',
     '|---|---|---|---|',
     ...TIERS.map((t) => `| ${cell(t.label)} | ${cell(t.meaning)} | ${cell(t.how)} | ${t.model ? 'yes' : 'no'} |`),
+    '',
+    PRECEDENCE,
     '',
     '## States',
     '',

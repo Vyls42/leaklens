@@ -183,22 +183,80 @@ test('--judge on api.openai.com without a key stops before any call', async () =
   assert.match(r.stderr, /needs a key in LEAKLENS_API_KEY or OPENAI_API_KEY/);
 });
 
-test('bad input is rejected with line numbers and nothing is written', async () => {
+test('rejected rows are listed with line and reason and the valid rows are checked; --strict fails the whole file', async () => {
   const dir = tmp();
   const f = path.join(dir, 'bad.jsonl');
-  const good = read(FIXTURE).split('\n')[0];
-  fs.writeFileSync(f, [good, '{"instance_id":"x__y-1","patch":"p"}', 'not json', good].join('\n') + '\n');
+  const lines = read(FIXTURE).trim().split('\n');
+  const empty = JSON.stringify({ ...JSON.parse(lines[1]), patch: '' });
+  fs.writeFileSync(f, [lines[0], '{"instance_id":"x__y-1","patch":"p"}', 'not json', lines[0], empty, lines[2]].join('\n') + '\n');
   const out = path.join(dir, 'out');
   const r = await run(['check', f, '--out', out]);
-  assert.equal(r.code, 2);
-  assert.match(r.stderr, /3 task\(s\) rejected, nothing checked/);
-  assert.match(r.stderr, /line 2: missing problem_statement/);
-  assert.match(r.stderr, /line 3: not valid JSON/);
-  assert.match(r.stderr, /line 4: duplicate instance_id astropy__astropy-13236/);
-  assert.equal(fs.existsSync(out), false);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(rows(out).map((x) => x.instance_id), [JSON.parse(lines[0]).instance_id, JSON.parse(lines[2]).instance_id]);
+  const md = read(path.join(out, 'summary.md'));
+  assert.match(md, /Methodology m1\.1 · 2 tasks/);
+  assert.match(md, /4 rows rejected and not checked, listed under "Rejected rows" below \(`--strict` fails the whole file instead\)\./);
+  for (const s of [md, r.stdout]) {
+    assert.match(s, /## Rejected rows\n\n- line 2 \(x__y-1\): missing problem_statement\n- line 3: not valid JSON\n- line 4 \(astropy__astropy-13236\): duplicate instance_id astropy__astropy-13236\n- line 5 \(astropy__astropy-14096\): empty patch\n/);
+  }
+  // --strict: the v2 behaviour, every rejected row named, nothing written
+  const out2 = path.join(dir, 'out2');
+  const s = await run(['check', f, '--strict', '--out', out2]);
+  assert.equal(s.code, 2);
+  assert.match(s.stderr, /4 task\(s\) rejected, nothing checked \(--strict\):\nline 2 \(x__y-1\): missing problem_statement\nline 3: not valid JSON\nline 4 .*duplicate instance_id astropy__astropy-13236\nline 5 \(astropy__astropy-14096\): empty patch/);
+  assert.equal(fs.existsSync(out2), false);
+  // a file with no valid row: nothing to check, exit 2, nothing written
+  const g = path.join(dir, 'none.jsonl');
+  fs.writeFileSync(g, ['not json', empty].join('\n') + '\n');
+  const n = await run(['check', g, '--out', out2]);
+  assert.equal(n.code, 2);
+  assert.match(n.stderr, /2 task\(s\) rejected, nothing checked, no valid row left:\nline 1: not valid JSON\nline 2 \(astropy__astropy-14096\): empty patch/);
+  assert.equal(fs.existsSync(out2), false);
+  // a clean file gives no rejected section (the fixture bytes test above holds it byte for byte)
+  assert.doesNotMatch(read(path.join(ROOT, 'fixtures/expected/summary.md')), /Rejected rows|construction diff|reversed/);
   const u = await run(['check', FIXTURE, '--bogus']);
   assert.equal(u.code, 2);
   assert.match(u.stderr, /unknown option --bogus/);
+});
+
+test('a construction diff is named with one line; --reverse-patch checks the removed side and drops test files', async () => {
+  const dir = tmp();
+  const body = ['def total(items):', '    total_price = None', '    acc = 0', '    for it in items:', '        if it.price is None:', '            continue', '        acc += it.price * it.qty', '    if acc < 0:', '        raise ValueError("negative")', '    if not items:', '        return 0.0', '    return round(acc, 2)'];
+  // construction diff (FeatureBench style): the body is removed and a stub left; the test file is removed too, so reversing alone would add it
+  const patch = ['diff --git a/shop/cart.py b/shop/cart.py', '--- a/shop/cart.py', '+++ b/shop/cart.py', '@@ -1,13 +1,3 @@',
+    ' ' + body[0], ...body.slice(1).map((l) => '-' + l), '+    pass', '+', '',
+    'diff --git a/tests/test_cart.py b/tests/test_cart.py', '--- a/tests/test_cart.py', '+++ b/tests/test_cart.py', '@@ -1,2 +0,0 @@', '-def test_total():', '-    assert total([]) == 0', ''].join('\n');
+  const issue = 'Implement total() as follows:\n\n' + body.join('\n');
+  const f = path.join(dir, 'fb.jsonl');
+  fs.writeFileSync(f, JSON.stringify({ instance_id: 'acme__shop-7', problem_statement: issue, patch }) + '\n');
+  const out = path.join(dir, 'out');
+  const r = await run(['check', f, '--out', out]);
+  assert.equal(r.code, 0, r.stderr);
+  const warn = /Warning: this looks like a construction diff; pass `--reverse-patch`\. In 1 of 1 patches the added lines are mostly blank or stubs/;
+  assert.match(r.stdout, warn);
+  assert.equal(r.stdout.match(/construction diff/g).length, 1, 'one line, not one per task');
+  assert.equal(rows(out)[0].tier_c.flag, false, 'the stub side matched nothing');
+  assert.equal('patch_reversed' in rows(out)[0], false);
+  const out2 = path.join(dir, 'out2');
+  const r2 = await run(['check', f, '--reverse-patch', '--out', out2]);
+  assert.equal(r2.code, 0, r2.stderr);
+  assert.doesNotMatch(r2.stdout, /construction diff/);
+  assert.match(r2.stdout, /Patches reversed \(`--reverse-patch`\): the removed lines were checked as the solution, test-file sections dropped\./);
+  const row = rows(out2)[0];
+  assert.equal(row.patch_reversed, true);
+  assert.equal(row.tier_c.flag, true);
+  assert.equal(row.tier_c.matched_line_count, row.tier_c.patch_line_count, 'every restored body line is in the issue');
+  assert.ok(row.tier_c.matched_lines.includes('acc += it.price * it.qty'));
+  assert.ok(row.tier_c.patch_line_count > 0 && !row.tier_c.matched_lines.some((l) => l.includes('test_total')), 'the test file section is dropped');
+  // a patch that is test files only has nothing left after reversing: listed as rejected
+  const g = path.join(dir, 'tests-only.jsonl');
+  fs.writeFileSync(g, [JSON.stringify({ instance_id: 'acme__shop-8', problem_statement: 'x', patch: patch.slice(patch.indexOf('diff --git a/tests')) }), JSON.stringify({ instance_id: 'acme__shop-7', problem_statement: issue, patch })].join('\n') + '\n');
+  const r3 = await run(['check', g, '--reverse-patch', '--out', path.join(dir, 'out3')]);
+  assert.equal(r3.code, 0, r3.stderr);
+  assert.match(r3.stdout, /- line 1 \(acme__shop-8\): patch has only test-file sections, nothing left after --reverse-patch/);
+  // SWE-bench Verified's own patches never trigger the warning (fixture: 10 tasks)
+  const r4 = await run(['check', FIXTURE, '--out', path.join(dir, 'out4')]);
+  assert.doesNotMatch(r4.stdout, /construction diff/);
 });
 
 test('a JSON array input gives the same rows as JSONL', async () => {

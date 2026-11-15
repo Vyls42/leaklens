@@ -33,6 +33,7 @@ export async function checkTask(task, { reposDir = null, client = null, tiebreak
     judge: j ? { model_tier: j.modelTier, any_check_flagged: j.anyRunFlag, runs: j.runsOut } : null,
     methodology_version: METHODOLOGY_VERSION,
     procedure: procedureOf({ judged: !!client, tiebreak, effort }),
+    ...(task.reversed ? { patch_reversed: true } : {}),
   };
 }
 

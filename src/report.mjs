@@ -1,5 +1,6 @@
 // results.jsonl (one row per task, input order) and summary.md. No timestamps or paths, so the same input gives the same bytes.
 import { METHODOLOGY_VERSION, WORDING, PROCEDURE_TEXT } from './definitions.mjs';
+import { rejectedLine } from './input.mjs';
 
 export const toJsonl = (rows) => rows.map((r) => JSON.stringify(r)).join('\n') + '\n';
 
@@ -22,7 +23,7 @@ export function publishedLine(rows, flags) {
   return `Leaklens public table for ${which}: ${best.flagged} flagged (Tier A where both checks agreed, or Tier C), methodology ${best.b.methodologyVersion}, as of ${best.b.asOf}: ${flags.source || 'https://leaklens.grain64.com'}/benchmarks/${best.slug}`;
 }
 
-export function summary(rows, { input, judged, model, repos, flags, procedure = judged ? 'm1.1' : 'rules' }) {
+export function summary(rows, { input, judged, model, repos, flags, procedure = judged ? 'm1.1' : 'rules', rejected = [], construction = null, reversed = false }) {
   const n = rows.length;
   const count = (f) => rows.filter(f).length;
   const tiers = { A: count((r) => r.tier === 'A'), B: count((r) => r.tier === 'B'), C: count((r) => r.tier === 'C') };
@@ -33,6 +34,15 @@ export function summary(rows, { input, judged, model, repos, flags, procedure = 
   L.push('');
   L.push(`Methodology ${METHODOLOGY_VERSION} · ${n} task${n === 1 ? '' : 's'} · ${judged ? `judged by \`${model}\` with ` : ''}${PROCEDURE_TEXT[procedure]}`);
   L.push('');
+  if (reversed) { L.push('Patches reversed (`--reverse-patch`): the removed lines were checked as the solution, test-file sections dropped.'); L.push(''); }
+  if (rejected.length) {
+    L.push(`${rejected.length} row${rejected.length === 1 ? '' : 's'} rejected and not checked, listed under "Rejected rows" below (\`--strict\` fails the whole file instead).`);
+    L.push('');
+  }
+  if (construction && construction.warn) {
+    L.push(`Warning: this looks like a construction diff; pass \`--reverse-patch\`. In ${construction.n} of ${construction.of} patches the added lines are mostly blank or stubs (\`pass\`, \`...\`, \`raise NotImplementedError\`) and the removed lines are full bodies, so this run checked the stubs left behind, not the solution.`);
+    L.push('');
+  }
   L.push(judged
     ? `**${flagged} of ${n} tasks flagged${pct(flagged)}: Tier A or B read by \`${model}\`, or Tier C by rule.**`
     : `**${tiers.C} of ${n} tasks${pct(tiers.C)}: gold-patch lines in the issue or discussion (Tier C). Tier A/B not read.**`);
@@ -64,6 +74,12 @@ export function summary(rows, { input, judged, model, repos, flags, procedure = 
       const fc = r.fix_commit ? (r.fix_commit.located ? r.fix_commit.date.slice(0, 10) : 'not located') : '';
       L.push(`| ${r.instance_id} | ${r.tier} | ${r.state} | ${cell(clip(r.verdict, 220))} |${repos ? ` ${fc} |` : ''}`);
     }
+    L.push('');
+  }
+  if (rejected.length) {
+    L.push('## Rejected rows');
+    L.push('');
+    for (const r of rejected) L.push(`- ${rejectedLine(r)}`);
     L.push('');
   }
   L.push(WORDING);

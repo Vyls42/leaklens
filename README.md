@@ -51,6 +51,23 @@ Tier and state definitions: DEFINITIONS.md, or https://leaklens.grain64.com/meth
 
 `npm install -g .` gives you a `leaklens` command instead of `node bin/leaklens.mjs`. `node bin/leaklens.mjs --help` lists every option.
 
+## Use as an agent skill
+
+`skills/leaklens/SKILL.md` lets Claude Code or Codex run these checks for you. It uses this CLI on your machine, says how many model calls a `--judge` run makes and asks before starting it, and reports flags in the wording below.
+
+```sh
+git clone --depth 1 https://github.com/Vyls42/leaklens
+cd leaklens
+
+# Claude Code
+mkdir -p ~/.claude/skills && cp -R skills/leaklens ~/.claude/skills/leaklens
+
+# Codex
+mkdir -p ~/.agents/skills && cp -R skills/leaklens ~/.agents/skills/leaklens
+```
+
+Then ask: "Use the leaklens skill to check tasks.jsonl for solution leakage and tell me which tasks to look at."
+
 ## Your score, on the unflagged tasks
 
 `rescore` takes your SWE-bench per-instance results and prints your score on all tasks and on the tasks whose text does not hand over the fix. It also lists the flagged tasks your model solved, a markdown table row and a citation line. It runs locally, with no network and no model. The flags are the Leaklens headline flags for SWE-bench Verified and Lite (`data/headline-flags.json`, the same flags as the Leaklens dataset and https://leaklens.grain64.com/rescore).
@@ -95,7 +112,15 @@ From https://leaklens.grain64.com/validation, SWE-bench Verified, as of methodol
 
 ## Input and output
 
-Input: one task per line (or a JSON array) with `instance_id`, `problem_statement` and `patch`; `repo`, `hints_text` and `created_at` are used when present (`repo` defaults from the SWE-bench id, `owner__name-1234`). Bad rows are rejected with their line numbers and nothing is checked.
+Input: one task per line (or a JSON array) with `instance_id`, `problem_statement` and `patch`; `repo`, `hints_text` and `created_at` are used when present (`repo` defaults from the SWE-bench id, `owner__name-1234`). A row without one of the three (or with a duplicate `instance_id`) is not checked: the summary lists it under "Rejected rows" with its line and reason, and every other row is checked. `--strict` fails the whole file instead (nothing checked, exit 2).
+
+### Your benchmark's format
+
+Three things to set before the first run on a new benchmark's own files:
+
+- **PR number.** The fix-PR link check needs the pull request number: give each row an integer `pr_number`. Without it the number is read from an `instance_id` that ends in `-1234` (SWE-bench style). An id that ends in `_1234` (OmniCode's java and cpp rows) gets none, and the link check then has nothing to match.
+- **Rows with an empty `patch`.** They are listed as rejected (line and reason) and the rest of the file is checked; nothing to drop by hand. OmniCode's six files as downloaded give 638 checked and 271 rejected (its cpp and java style rows ship an empty `patch`). Add `--strict` if one bad row should fail the run. (Engine v2 rejected the whole file on one such row: drop them first there.)
+- **Which way the diff runs.** The check compares the lines the gold patch *adds* with the issue text. A file whose `patch` is the task-construction diff, which strips the feature out of the repo (FeatureBench's), has the solution on the removed side. When at least half the patches look like that (added lines mostly blank or stubs such as `pass`, `...`, `raise NotImplementedError`; removed lines full bodies), the summary says "this looks like a construction diff; pass `--reverse-patch`". `--reverse-patch` swaps added and removed lines and drops test-file sections (`tests/`, `test_*.py`, `*_test.*`, `conftest.py`); each row then carries `"patch_reversed": true`. On FeatureBench's full split as shipped, 164 of 166 patches look like construction diffs; on SWE-bench Verified, 0 of 500.
 
 Output, in `--out` (default `leaklens-out`): `results.jsonl`, one row per task in input order (tier, state, verdict, matched patch lines, fix-PR link with offsets, fix commit, every judge check with its quotes and offsets), and `summary.md`. No timestamps or paths, so the same input gives the same bytes.
 

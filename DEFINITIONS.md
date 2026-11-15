@@ -12,6 +12,8 @@ Generated from `src/definitions.mjs` by `node scripts/gen-definitions.mjs`. The 
 | Links the fix PR | The issue text or the discussion links the pull request whose change is the gold patch. | Deterministic: a link to the instance’s own pull-request number, found by string match. Shown as its own signal; it does not change the tier. | no |
 | No quoted evidence | Nothing in the text states or points to the fix. | A finding about the text only, not proof that the task is clean. | no |
 
+Each task is counted under one tier, in the order A, then C, then B. A task whose text repeats added lines of the gold patch (the Tier C rule) and also states the fix is counted as Tier A, so a table’s Tier C count is the tasks that are Tier C only. A run without `--judge` reads no Tier A, so it reports every task the rule matches as Tier C.
+
 ## States
 
 Each task in `results.jsonl` has exactly one `state`.

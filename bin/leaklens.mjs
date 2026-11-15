@@ -2,7 +2,7 @@
 // leaklens: per-task solution-leakage check for coding benchmarks. Runs on your machine.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readTasks, InputError } from '../src/input.mjs';
+import { readTasks, InputError, constructionCount } from '../src/input.mjs';
 import { checkAll } from '../src/check.mjs';
 import { makeClient, JudgeError } from '../src/judge.mjs';
 import { toJsonl, summary } from '../src/report.mjs';
@@ -20,7 +20,9 @@ Reads SWE-bench-style tasks (JSONL or a JSON array; fields instance_id, problem_
 optional repo, hints_text, created_at) and writes, per task, the tier, state and evidence.
 
 With no options: no network and no model. Prints Tier C (gold-patch lines in the issue or
-discussion) and whether the text links the fix pull request.
+discussion) and whether the text links the fix pull request. Rows without an instance_id,
+problem_statement or patch (or a duplicate id) are listed with their line and reason; the rest
+are checked.
 
 Options:
   --out <dir>          where results.jsonl and summary.md go (default: leaklens-out)
@@ -37,6 +39,9 @@ Options:
   --no-tiebreak        with --judge: skip the third check (2 calls a task; labelled m1.1-no-tiebreak)
   --no-reasoning-effort  with --judge: do not send reasoning_effort, for models that refuse it
                        (labelled m1.1-no-effort). --tiebreak and --reasoning-effort are the default
+  --strict             one rejected row fails the whole file: nothing checked, exit 2
+  --reverse-patch      the patch is a task-construction diff (it strips the feature out, FeatureBench
+                       style): swap added and removed lines and drop test-file sections before checking
   --concurrency <n>    parallel tasks with --judge (default 4)
   --fresh              with --judge: re-judge tasks already in <out>/results.jsonl
   --quiet              print nothing but errors
@@ -68,7 +73,7 @@ function parseArgs(argv) {
         const val = v !== undefined ? v : argv[++i];
         if (val === undefined || val.startsWith('--')) throw new InputError(`--${k} needs a value`);
         o[k] = val;
-      } else if (['judge', 'tiebreak', 'reasoning-effort', 'no-tiebreak', 'no-reasoning-effort', 'fresh', 'quiet', 'json'].includes(k)) o[k] = true;
+      } else if (['judge', 'tiebreak', 'reasoning-effort', 'no-tiebreak', 'no-reasoning-effort', 'fresh', 'quiet', 'json', 'strict', 'reverse-patch'].includes(k)) o[k] = true;
       else throw new InputError(`unknown option --${k} (see leaklens --help)`);
     } else o._.push(a);
   }
@@ -90,7 +95,8 @@ async function main() {
   const tiebreak = !o['no-tiebreak'], effort = !o['no-reasoning-effort'];
   const procedure = procedureOf({ judged: !!o.judge, tiebreak, effort });
   if (o.repos && !fs.existsSync(o.repos)) throw new InputError(`--repos ${o.repos}: no such directory`);
-  const tasks = readTasks(file);
+  const { tasks, rejected } = readTasks(file, { strict: !!o.strict, reversePatch: !!o['reverse-patch'] });
+  const construction = o['reverse-patch'] ? null : constructionCount(tasks);
   const outDir = o.out || 'leaklens-out';
   if (fs.existsSync(outDir) && !fs.statSync(outDir).isDirectory()) throw new InputError(`--out ${outDir}: is a file, not a directory`);
   const log = (s) => { if (!o.quiet) process.stderr.write(s + '\n'); };
@@ -117,7 +123,8 @@ async function main() {
       try {
         const r = JSON.parse(l);
         const sameRepos = !!r.fix_commit === !!o.repos;
-        if (r.judge && r.judge.model === model && sameRepos && r.procedure === procedure) reuse.set(r.instance_id, r);
+        const sameSide = !!r.patch_reversed === !!o['reverse-patch'];
+        if (r.judge && r.judge.model === model && sameRepos && sameSide && r.procedure === procedure) reuse.set(r.instance_id, r);
       } catch {}
     }
     if (reuse.size) log(`reusing ${reuse.size} tasks already judged in ${prev} (--fresh to re-judge)`);
@@ -142,7 +149,7 @@ async function main() {
   fs.writeFileSync(path.join(outDir, 'results.jsonl'), toJsonl(rows));
   let flags = null;
   try { flags = JSON.parse(fs.readFileSync(o.flags || new URL('../data/headline-flags.json', import.meta.url), 'utf8')); } catch (e) { if (o.flags) throw new InputError(`cannot read the flag file ${o.flags}: ${e.code || e.message}`); }
-  const md = summary(rows, { input: path.basename(file), judged: !!client, model, repos: !!o.repos, flags, procedure });
+  const md = summary(rows, { input: path.basename(file), judged: !!client, model, repos: !!o.repos, flags, procedure, rejected, construction, reversed: !!o['reverse-patch'] });
   fs.writeFileSync(path.join(outDir, 'summary.md'), md);
   if (!o.quiet) {
     process.stdout.write(md);
@@ -153,7 +160,7 @@ async function main() {
 function rescoreCmd(o, file, extra) {
   if (!file) throw new InputError('leaklens rescore needs a results file (or - for standard input)');
   if (extra.length) throw new InputError(`unexpected argument "${extra[0]}"`);
-  for (const k of ['judge', 'tiebreak', 'repos', 'out', 'model']) if (o[k]) throw new InputError(`--${k} does not apply to rescore`);
+  for (const k of ['judge', 'tiebreak', 'repos', 'out', 'model', 'strict', 'reverse-patch']) if (o[k]) throw new InputError(`--${k} does not apply to rescore`);
   let text;
   try { text = fs.readFileSync(file === '-' ? 0 : file, 'utf8'); } catch (e) { throw new InputError(`cannot read ${file}: ${e.code || e.message}`); }
   const flagsFile = o.flags || new URL('../data/headline-flags.json', import.meta.url);

@@ -56,6 +56,9 @@ export const TIERS = [
   },
 ];
 
+// One tier per task (BEN-366): the order in which the tiers are given, said once for the site and DEFINITIONS.md.
+export const PRECEDENCE = 'Each task is counted under one tier, in the order A, then C, then B. A task whose text repeats added lines of the gold patch (the Tier C rule) and also states the fix is counted as Tier A, so a table\u2019s Tier C count is the tasks that are Tier C only. A run without `--judge` reads no Tier A, so it reports every task the rule matches as Tier C.';
+
 // How a task reads in a report. Exactly one state per task.
 export const STATES = [
   { id: 'flag', meaning: 'Tier A, B or C: the text hands over the fix or its exact place. Tier A and B count only when both checks agree (or a third check settles them).' },
