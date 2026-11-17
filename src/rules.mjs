@@ -189,6 +189,28 @@ export function disputedSentence(anyRunFlag, nChecks, where) {
     : `Disputed: one of the two checks found ${found}, the other found nothing. Not counted as a flag${where ? '; the quote is ' + where : ''}.`;
 }
 
+// G8 pass 1 item 2: a Tier A verdict quotes a sentence the checks read as stating the fix (kind stated_fix), never the
+// lead-in before it. Other tiers keep the first quote shown. Shared by the CLI, the hosted audit and the public table.
+// BEN-492: after a tiebreak `shown` is only run 3's quotes that overlap an earlier run; when none of those states the fix,
+// `pool` (tiebreakPool: run 3's own quotes, then the agreeing run's quotes that overlap them) supplies the stated_fix quote.
+export function verdictQuote(tier, shown, pool) {
+  if (!shown || !shown.length) return null;
+  if (tier === 'A') {
+    const s = shown.find((q) => q.kind === 'stated_fix') || (pool || []).find((q) => q.kind === 'stated_fix');
+    if (s) return s.text;
+  }
+  return shown[0].text;
+}
+
+// BEN-492: the quotes a tiebreak verdict may quote, in order: every quote of run 3 (django__django-11179), then the quotes of
+// the run it agreed with that overlap run 3's (django__django-16256: run 3 quoted only a path inside run 1's stated_fix sentence).
+export function tiebreakPool(d, runs) {
+  const r3 = (runs && runs[2] && runs[2].quotes) || [];
+  const w = d && d.decided && d.with ? runs[d.with - 1] : null;
+  const agreed = w ? w.quotes.filter((q, j) => (d.sharedWith && d.sharedWith.has ? d.sharedWith.has(j) : false) || r3.some((a) => spansOverlap(a, q))) : [];
+  return [...r3, ...agreed];
+}
+
 export function verdictSentence(tier, agreement, firstQuote, ov) {
   if (tier === 'A') return `The text states the fix: “${clip(oneLine(firstQuote || ''), 170)}”`;
   if (tier === 'C') return `${ov.matched} of ${ov.total} added patch lines appear in the issue or discussion.`;
@@ -235,9 +257,9 @@ export function verdictOf(tier, state, j, ov, link) {
   } else if (state === 'link') {
     v = '';
   } else if (j && j.agreement === 'tiebreak' && (tier === 'A' || tier === 'B')) {
-    v = tiebreakVerdict(j.decision, tier, j.shown.length ? j.shown[0].text : null);
+    v = tiebreakVerdict(j.decision, tier, verdictQuote(tier, j.shown, tiebreakPool(j.decision, j.runs)));
   } else {
-    v = verdictSentence(tier, j ? j.agreement : 'n/a', j && j.shown.length ? j.shown[0].text : null, { matched: ov.matched_line_count, total: ov.patch_line_count });
+    v = verdictSentence(tier, j ? j.agreement : 'n/a', j ? verdictQuote(tier, j.shown) : null, { matched: ov.matched_line_count, total: ov.patch_line_count });
   }
   if (link && (state === 'link' || state === 'disputed')) v = (v ? v + ' ' : '') + `${SOURCE_WORD[link.source]} links the pull request that is the fix.`;
   return v;

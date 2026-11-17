@@ -2,6 +2,10 @@
 
 Leaklens checks a coding benchmark for tasks whose own text hands over the fix: the issue or its comments state the change, or lines of the gold patch reappear in the text. It writes one row per task, with the sentence quoted, the tier and, if you point it at a local clone, the date of the upstream fix commit. It runs on your machine. The patch-overlap tier needs no network and no model; the quoted-sentence tier uses your own API key or a local endpoint. "Flagged" means the task text hands over the fix. It says nothing about what any model did.
 
+![Leaklens on SWE-bench Verified: type a task id, see the flag and the quoted sentence from the issue that states the fix](media/leaklens-demo.gif)
+
+The hosted tables at [leaklens.grain64.com](https://leaklens.grain64.com) have every SWE-bench Verified and Lite task checked already ([the same demo as an MP4 with captions, under a minute](https://leaklens.grain64.com/leaklens-demo.mp4)). This repository is the engine behind them, for your own tasks.
+
 ## Quickstart
 
 Clone this repository and run these from its folder. Node 18.17 or later; there is nothing to install (no dependencies).

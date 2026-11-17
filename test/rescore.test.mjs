@@ -54,12 +54,26 @@ test('text report: three scores, flagged tasks solved, a table row and a citatio
   assert.match(r.stdout, /149 headline-flagged tasks\s+91\.3%/);
   assert.match(r.stdout, /not a clean set: they include tasks a third check settled as stating the fix/);
   assert.match(r.stdout, /Headline-flagged tasks it solved \(136\): the task text hands over the fix/);
-  assert.match(r.stdout, /\| Sonar \(Opus 4\.5\) \| 79\.2% \(396\/500\) \| 74\.1% \(260\/351\) \| −5\.1 \| 136\/149 \|/);
-  assert.match(r.stdout, /SWE-bench Verified: 79\.2% \(396\/500\) on all tasks, 74\.1% \(260\/351\) on the 351 tasks outside the 149 headline flags \(Leaklens headline flags: Tier A where both checks agreed on a quote that states the fix, or Tier C; methodology m1\.1/);
+  // G9.1 item 2 (signed BEN-517): the issue-body line under the three scores, and both scores in the row and the citation.
+  assert.ok(r.stdout.includes("  Leaving out only the 82 with the fix quoted from the issue body (the text SWE-bench's checklist lets an agent read): 76.1% (318/418).\n"));
+  assert.match(r.stdout, /\| Sonar \(Opus 4\.5\) \| 79\.2% \(396\/500\) \| 74\.1% \(260\/351\) \| −5\.1 \| 136\/149 \| 76\.1% \(318\/418\) \|/);
+  assert.match(r.stdout, /\| Without the 82 flagged in the issue body \|/);
+  assert.ok(r.stdout.includes('SWE-bench Verified: 79.2% (396/500) on all tasks; 74.1% without all 149 flags; 76.1% without the 82 flagged in the issue body (260/351 and 318/418 resolved; Leaklens headline flags: Tier A where both checks agreed on a quote that states the fix, or Tier C; methodology m1.1'));
   // M9 pass 1 item 1: the restated set is never described as tasks that do not hand over the fix.
   assert.doesNotMatch(r.stdout, /unflagged|do(es)? not hand over the fix/i);
   assert.match(r.stdout, /exposure was possible, not that a model trained on it/);
   assert.doesNotMatch(r.stdout, /contaminat|cheat/i);
+});
+
+test('issue-body set: 82 of the 149 Verified headline flags; Lite has none, so its report has no such line', async () => {
+  const v = FLAGS.benchmarks['swe-bench-verified'], flagged = new Set(v.flagged);
+  assert.equal(v.issueBody.length, 82);
+  assert.ok(v.issueBody.every((i) => flagged.has(i)));
+  const r = rescore(JSON.parse(fs.readFileSync(SONAR, 'utf8')).resolved, FLAGS, 'verified');
+  assert.deepEqual(r.issueBody, { flaggedTotal: 82, outsideTotal: 418, resolvedOn: 78, resolvedOutside: 318, pct: 76.1 });
+  const lite = rescore(FLAGS.benchmarks['swe-bench-lite'].tasks.slice(0, 30), FLAGS, 'lite');
+  assert.equal(lite.issueBody, undefined);
+  assert.doesNotMatch(citation(lite) + tableRow(lite), /issue body/);
 });
 
 test('every input shape gives the same numbers', async () => {

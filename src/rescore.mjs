@@ -265,19 +265,38 @@ export function rescore(ids, flags, benchmark) {
     for (const [s2, n] of Object.entries(fits(ids, flags))) if (s2 !== slug && n === resolved.length) r.alsoFits.push({ slug: s2, name: flags.benchmarks[s2].name });
   }
   r.change = r.pctAll === null || r.pctUnflagged === null ? null : Math.round(10 * (r.pctUnflagged - r.pctAll)) / 10;
+  // The headline flags whose fix is quoted from the issue body (Verified: 82 of the 149), when the flag file carries them.
+  // x = resolved on all tasks minus resolved on these flags, over the tasks outside them (Sonar: 396 - 78 = 318 of 418).
+  if (Array.isArray(b.issueBody) && b.issueBody.length) {
+    const ib = new Set(b.issueBody), on = resolved.filter((i) => ib.has(i)).length, outside = b.total - ib.size;
+    r.issueBody = { flaggedTotal: ib.size, outsideTotal: outside, resolvedOn: on, resolvedOutside: resolved.length - on, pct: pct(resolved.length - on, outside) };
+  }
   return r;
 }
 
 const signed = (x) => (x === null ? 'n/a' : (x > 0 ? '+' : x < 0 ? '−' : '±') + Math.abs(x).toFixed(1));
 
+// The line under the three scores (G9.1 item 2, signed BEN-517). Same words on /rescore and in the CLI.
+export function issueBodyLine(r) {
+  const x = r.issueBody;
+  if (!x) return '';
+  return `Leaving out only the ${x.flaggedTotal} with the fix quoted from the issue body (the text SWE-bench's checklist lets an agent read): ${fmtPct(x.pct)} (${x.resolvedOutside}/${x.outsideTotal}).`;
+}
+// "74.1% without all 149 flags; 76.1% without the 82 flagged in the issue body" (signed BEN-517), carried by the row and the citation.
+const bothScores = (r) => `${fmtPct(r.pctUnflagged)} without all ${r.flaggedTotal} flags; ${fmtPct(r.issueBody.pct)} without the ${r.issueBody.flaggedTotal} flagged in the issue body`;
+
 export function tableHeader(r) {
+  if (r.issueBody) return `| Model | All ${r.total} tasks | ${r.unflaggedTotal} tasks outside the ${r.flaggedTotal} headline flags | Change (points) | Headline-flagged tasks solved | Without the ${r.issueBody.flaggedTotal} flagged in the issue body |\n|---|---|---|---|---|---|`;
   return `| Model | All ${r.total} tasks | ${r.unflaggedTotal} tasks outside the ${r.flaggedTotal} headline flags | Change (points) | Headline-flagged tasks solved |\n|---|---|---|---|---|`;
 }
 export function tableRow(r, label = 'your model') {
-  return `| ${label} | ${fmtPct(r.pctAll)} (${r.resolved}/${r.total}) | ${fmtPct(r.pctUnflagged)} (${r.resolvedUnflagged}/${r.unflaggedTotal}) | ${signed(r.change)} | ${r.resolvedFlagged}/${r.flaggedTotal} |`;
+  const base = `| ${label} | ${fmtPct(r.pctAll)} (${r.resolved}/${r.total}) | ${fmtPct(r.pctUnflagged)} (${r.resolvedUnflagged}/${r.unflaggedTotal}) | ${signed(r.change)} | ${r.resolvedFlagged}/${r.flaggedTotal} |`;
+  return r.issueBody ? `${base} ${fmtPct(r.issueBody.pct)} (${r.issueBody.resolvedOutside}/${r.issueBody.outsideTotal}) |` : base;
 }
 export function citation(r) {
-  return `${r.name}: ${fmtPct(r.pctAll)} (${r.resolved}/${r.total}) on all tasks, ${fmtPct(r.pctUnflagged)} (${r.resolvedUnflagged}/${r.unflaggedTotal}) on the ${outsideName(r)} (Leaklens headline flags: ${HEADLINE}; methodology ${r.methodologyVersion}, flags as of ${r.asOf}; ${SITE}/rescore).`;
+  const tail = `Leaklens headline flags: ${HEADLINE}; methodology ${r.methodologyVersion}, flags as of ${r.asOf}; ${SITE}/rescore`;
+  if (r.issueBody) return `${r.name}: ${fmtPct(r.pctAll)} (${r.resolved}/${r.total}) on all tasks; ${bothScores(r)} (${r.resolvedUnflagged}/${r.unflaggedTotal} and ${r.issueBody.resolvedOutside}/${r.issueBody.outsideTotal} resolved; ${tail}).`;
+  return `${r.name}: ${fmtPct(r.pctAll)} (${r.resolved}/${r.total}) on all tasks, ${fmtPct(r.pctUnflagged)} (${r.resolvedUnflagged}/${r.unflaggedTotal}) on the ${outsideName(r)} (${tail}).`;
 }
 
 // The CLI's text report. The page renders the same fields.
@@ -290,6 +309,7 @@ export function report(r, label = 'your model') {
   L.push(`  ${names[0].padEnd(w)}${fmtPct(r.pctAll).padStart(6)}  (${r.resolved} resolved)`);
   L.push(`  ${names[1].padEnd(w)}${fmtPct(r.pctUnflagged).padStart(6)}  (${r.resolvedUnflagged} resolved)   change ${signed(r.change)} points`);
   L.push(`  ${names[2].padEnd(w)}${fmtPct(r.pctFlagged).padStart(6)}  (${r.resolvedFlagged} resolved)`);
+  if (r.issueBody) L.push(`  ${issueBodyLine(r)}`);
   L.push(`  Headline flags: ${HEADLINE}.`);
   L.push(`  ${OUTSIDE_NOTE}`);
   L.push('');
