@@ -100,7 +100,11 @@ export function verify(raw, issue, hints) {
   let dropped = 0;
   for (const q of (raw && Array.isArray(raw.quotes) ? raw.quotes : []).slice(0, 3)) {
     const source = q && q.source === 'hints' ? 'hints' : 'issue';
-    const text = String((q && q.text) || '');
+    let text = String((q && q.text) || '');
+    // BEN-537: a code quote sometimes comes back with its newlines still escaped ("\\n" as two characters); unescape before matching
+    if (/\\[nt"]/.test(text) && !/\n/.test(text) && !locate(source === 'hints' ? hints : issue, text) && !locate(source === 'hints' ? issue : hints, text)) {
+      text = text.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"');
+    }
     const kind = q && q.kind === 'points_to' ? 'points_to' : 'stated_fix';
     const hay = source === 'hints' ? hints : issue;
     let loc = locate(hay, text);
@@ -122,6 +126,42 @@ export function verify(raw, issue, hints) {
     return { tier: 'none', rationale, quotes: [], dropped };
   }
   return { tier: tier, rationale, quotes: tier === 'none' ? [] : quotes, dropped };
+}
+
+// ---------- what a quote shows and how it is labelled (BEN-537, M9 pass 2 defect 1) ----------
+// A lead-in that ends in a colon right before a fenced code block ("I was able to fix this by patching ...:" then ```...```)
+// is shown with that block: the block is what the lead-in introduces, often the fix itself. Applied after the runs are
+// compared (combine/decide see the spans the model quoted), so it never changes a tier.
+const FENCED_AFTER = /^[ \t]*\r?\n(?:[ \t]*\r?\n)?[ \t]*(```|~~~)[^\n]*\n[\s\S]*?\n[ \t]*\1[ \t]*(?=\r?\n|$)/;
+const MAX_WITH_BLOCK = 2000;
+const FIX_LEAD = /\b(fix|fixed|fixes|fixing|patch|patched|patching|solution|solved|solves|workaround|changing|changed|change it|replac(e|ed|ing))\b/i;
+export function withBlock(q, issue, hints) {
+  if (!q || !/:\s*$/.test(q.text || '')) return q;
+  const hay = q.source === 'hints' ? hints : issue;
+  if (typeof hay !== 'string' || hay.slice(q.start, q.end) !== q.text) return q;
+  const m = FENCED_AFTER.exec(hay.slice(q.end));
+  if (!m || q.end + m[0].length - q.start > MAX_WITH_BLOCK) return q;
+  const end = q.end + m[0].length;
+  return { ...q, end, text: hay.slice(q.start, end), block: true };
+}
+
+// A quote's label comes from its own run's reading: a run that read B (points to the fix) shows no "States the fix" quote, and
+// in a run that read A a lead-in that says it fixes/patches, shown with its code block, states the fix. `runTiers[i]` is the
+// tier of run i+1 (unknown runs leave the stored kind). Mutates nothing; returns new quote objects.
+export function labelQuotes(quotes, runTiers, issue, hints) {
+  return (quotes || []).map((q) => {
+    let out = issue != null || hints != null ? withBlock(q, issue, hints) : q;
+    const tier = runTiers ? runTiers[(out.run || 1) - 1] : null;
+    if (tier === 'B' && out.kind === 'stated_fix') out = { ...out, kind: 'points_to' };
+    else if (tier === 'A' && out.block && out.kind === 'points_to' && FIX_LEAD.test(q.text)) out = { ...out, kind: 'stated_fix' };
+    return out;
+  });
+}
+
+// What a disputed row says its checks found, from the quotes it shows: "a stated fix" only when a shown quote states it.
+export function disputedFound(anyRunFlag, quotes) {
+  if (anyRunFlag !== 'A' || !quotes || !quotes.length) return anyRunFlag;
+  return quotes.some((q) => q.kind === 'stated_fix') ? 'A' : 'B';
 }
 
 const spansOverlap = (a, b) => a.source === b.source && a.start < b.end && b.start < a.end;
@@ -251,7 +291,7 @@ export function stateOf(tier, j, link) {
 export function verdictOf(tier, state, j, ov, link) {
   let v;
   if (state === 'disputed') {
-    v = disputedSentence(j.anyRunFlag, j.runs.length, 'in the runs');
+    v = disputedSentence(disputedFound(j.anyRunFlag, j.runs.flatMap((x) => x.quotes)), j.runs.length, 'in the runs');
   } else if (state === 'rule_clear') {
     v = 'No rule matched: no added patch line appears in the text and the fix pull request is not linked. The text was not read by a model (add --judge for Tier A/B).';
   } else if (state === 'link') {

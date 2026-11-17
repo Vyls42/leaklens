@@ -1,7 +1,7 @@
 // The judged tier: Tier A/B from two differently worded checks (and, with --tiebreak, the m1.1 third check),
 // sent to the user's own OpenAI-compatible endpoint. Every quote is checked word for word against the task text.
 import { SCHEMA, SYSTEM_1, SYSTEM_2, SYSTEM_3, userPrompt } from './prompts.mjs';
-import { verify, combine, decide } from './rules.mjs';
+import { verify, combine, decide, labelQuotes } from './rules.mjs';
 
 export class JudgeError extends Error {}
 
@@ -78,6 +78,13 @@ export async function judgeTask(client, task, { tiebreak = false } = {}) {
       out.shown = r3.quotes.filter((_, i) => d.shared3.has(i));
     }
   }
+  // BEN-537: after the runs are compared, each quote gets its label from its own run's reading and a lead-in its code block
+  // (in place, so `shown` keeps pointing at the same quotes)
+  const tiers = out.runs.map((r) => r.tier);
+  out.runs.forEach((r, i) => labelQuotes(r.quotes.map((q) => ({ ...q, run: i + 1 })), tiers, task.issue, task.hints).forEach((l, k) => {
+    const { run, ...rest } = l;
+    Object.assign(r.quotes[k], rest);
+  }));
   out.runsOut = out.runs.map(runOut);
   return out;
 }
