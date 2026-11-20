@@ -60,7 +60,7 @@ Tier and state definitions: DEFINITIONS.md, or https://leaklens.grain64.com/meth
 `skills/leaklens/SKILL.md` lets Claude Code or Codex run these checks for you. It uses this CLI on your machine, says how many model calls a `--judge` run makes and asks before starting it, and reports flags in the wording below.
 
 ```sh
-git clone --depth 1 https://github.com/Vyls42/leaklens
+git clone --depth 1 https://github.com/grain64-labs/leaklens
 cd leaklens
 
 # Claude Code

@@ -12,7 +12,7 @@ Use it before releasing or citing a SWE-bench-style benchmark, or when the user 
 The skill needs the open-source CLI (Node 18.17 or later, no dependencies, MIT). If `bin/leaklens.mjs` is not in the working copy, clone it once and use that folder:
 
 ```sh
-git clone --depth 1 https://github.com/Vyls42/leaklens leaklens
+git clone --depth 1 https://github.com/grain64-labs/leaklens leaklens
 ```
 
 Below, `LEAKLENS` means `node leaklens/bin/leaklens.mjs` (adjust the path to where the clone is).

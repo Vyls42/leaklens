@@ -325,3 +325,14 @@ test('DEFINITIONS.md is generated from src/definitions.mjs and up to date', () =
   const r = execFileSync(process.execPath, [path.join(ROOT, 'scripts/gen-definitions.mjs'), '--check'], { encoding: 'utf8' });
   assert.match(r, /up to date/);
 });
+
+test('BEN-620: --judge never reads a reply with no verdict as none: it retries once, then stops with an error', async () => {
+  const stub = await startStub({ blankAnswers: true });
+  const out = tmp();
+  const r = await run(['check', 'fixtures/swe-bench-verified-10.jsonl', '--judge', '--model', 'recorded', '--base-url', stub.url, '--out', out, '--quiet', '--concurrency', '1']);
+  await stub.close();
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /no verdict: the reply has no rationale \(twice\)/);
+  assert.ok(!fs.existsSync(path.join(out, 'results.jsonl')), 'no results file with a made-up none');
+  assert.ok(stub.requests.length >= 2 && stub.requests.length <= 4);
+});

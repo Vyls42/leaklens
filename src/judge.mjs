@@ -1,9 +1,32 @@
 // The judged tier: Tier A/B from two differently worded checks (and, with --tiebreak, the m1.1 third check),
 // sent to the user's own OpenAI-compatible endpoint. Every quote is checked word for word against the task text.
 import { SCHEMA, SYSTEM_1, SYSTEM_2, SYSTEM_3, userPrompt } from './prompts.mjs';
-import { verify, combine, decide, labelQuotes } from './rules.mjs';
+import { verify, combine, decide, labelQuotes, NO_VERDICT } from './rules.mjs';
 
 export class JudgeError extends Error {}
+
+// BEN-620: the answer's token cap. Reasoning tokens count against it; at 1500 a medium-effort check on a long, disputed
+// task could spend the whole cap reasoning and return an empty reply (ok, no text). Only the tokens used are billed.
+export const JUDGE_MAX_TOKENS = 4000;
+
+// BEN-620: one check = one call, its reply verified; a reply with no verdict (not JSON, no tier, no rationale) is asked
+// once more, and a second such reply is an error: it never reads as "none".
+export async function readCheck(client, system, user, effort, issue, hints) {
+  let last = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let raw;
+    try { raw = await client.call(system, user, effort); }
+    catch (e) {
+      if (!(e instanceof JudgeError && /the model answer is not JSON/.test(e.message))) throw e;
+      last = `${NO_VERDICT}: ${e.message}`;
+      continue;
+    }
+    const r = verify(raw, issue, hints);
+    if (!r.error) return r;
+    last = r.error;
+  }
+  throw new JudgeError(`${last} (twice)`);
+}
 
 // Extracts the first JSON object from a model answer (some local servers wrap it in prose or code fences).
 export function parseAnswer(content) {
@@ -24,7 +47,7 @@ export function makeClient({ baseUrl, model, apiKey, effort = false, timeoutMs =
       const body = {
         model,
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-        max_tokens: 1500,
+        max_tokens: JUDGE_MAX_TOKENS,
       };
       if (sent === 'json_schema') body.response_format = { type: 'json_schema', json_schema: { name: 'leak_verdict', schema: SCHEMA, strict: true } };
       else if (sent === 'json_object') body.response_format = { type: 'json_object' };
@@ -61,14 +84,12 @@ const runOut = (r) => ({ tier: r.tier, rationale: r.rationale, dropped: r.droppe
 // Judges one task. Returns the combined model reading plus every run, for the report.
 export async function judgeTask(client, task, { tiebreak = false } = {}) {
   const user = userPrompt(task.issue, task.hints, task.patch);
-  const [a1, a2] = await Promise.all([client.call(SYSTEM_1, user, 'low'), client.call(SYSTEM_2, user, 'medium')]);
-  const r1 = verify(a1, task.issue, task.hints);
-  const r2 = verify(a2, task.issue, task.hints);
+  const [r1, r2] = await Promise.all([readCheck(client, SYSTEM_1, user, 'low', task.issue, task.hints), readCheck(client, SYSTEM_2, user, 'medium', task.issue, task.hints)]);
   const c = combine(r1, r2);
   const anyRunFlag = r1.tier === 'A' || r2.tier === 'A' ? 'A' : r1.tier === 'B' || r2.tier === 'B' ? 'B' : null;
   const out = { modelTier: c.tier, agreement: c.agreement, anyRunFlag, runs: [r1, r2], shown: c.tier === 'none' ? [] : r1.quotes.length ? r1.quotes : r2.quotes, decision: null };
   if (tiebreak && c.agreement === 'split') {
-    const r3 = verify(await client.call(SYSTEM_3, user, 'medium'), task.issue, task.hints);
+    const r3 = await readCheck(client, SYSTEM_3, user, 'medium', task.issue, task.hints);
     const d = decide(r1, r2, r3);
     out.runs.push(r3);
     out.decision = d;

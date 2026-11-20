@@ -92,9 +92,23 @@ export function locate(haystack, quote) {
   return { start, end };
 }
 
+// BEN-620: a reply with no verdict (not an object, no tier in A/B/none, no rationale) is a failed read, never "none".
+// Returns the reason, or null when the reply carries a verdict.
+export const NO_VERDICT = 'no verdict';
+export function noVerdict(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return `${NO_VERDICT}: the reply held no JSON object`;
+  if (raw.tier !== 'A' && raw.tier !== 'B' && raw.tier !== 'none') return `${NO_VERDICT}: the reply's tier is missing or not A, B or none`;
+  if (typeof raw.rationale !== 'string' || !raw.rationale.trim()) return `${NO_VERDICT}: the reply has no rationale`;
+  return null;
+}
+export const isNoVerdict = (msg) => String(msg || '').startsWith(NO_VERDICT);
+
 // Keeps only quotes found word for word in the issue or hints; an A/B left without one reads as "none".
+// A reply with no verdict comes back with `error` set (BEN-620): callers retry once, then count it as an error.
 export function verify(raw, issue, hints) {
-  const tier = raw && (raw.tier === 'A' || raw.tier === 'B') ? raw.tier : 'none';
+  const missing = noVerdict(raw);
+  if (missing) return { tier: 'none', rationale: '', quotes: [], dropped: 0, error: missing };
+  const tier = raw.tier === 'A' || raw.tier === 'B' ? raw.tier : 'none';
   const rationale = String((raw && raw.rationale) || '').slice(0, 600);
   const quotes = [];
   let dropped = 0;
@@ -211,10 +225,117 @@ export function decide(r1, r2, r3) {
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 const oneLine = (s) => s.replace(/\s+/g, ' ').trim();
 
+// BEN-635 (QA on BEN-632, pandas-dev__pandas-49486): a long stated_fix quote can open on a pointer ("the right starting point
+// is here: <url>") and state the change only further down ("I only changed from `len(pat) > 1` to `len(pat) > 0`"). Clipping
+// its head then quotes the pointer as the fix. When no sentence the clipped head shows states a change and a later sentence
+// does, a Tier A verdict quotes that sentence, with "…" before it. Short quotes, and heads that state the change, are unchanged.
+const FIX_WORDS = [
+  [/\bchang(?:e|ed|es|ing)\b.{0,80}?\bfrom\b.{1,80}?\bto\b/i, 4],
+  [/\breplac(?:e|ed|es|ing)\b.{1,80}?\bwith\b/i, 3],
+  [/\b(?:should|must|needs? to) (?:be|use|call|return|pass|check)\b/i, 3],
+  [/\binstead\b/i, 2],
+  [/\b(?:the )?fix (?:is|would be)\b/i, 3],
+  [/\b(?:changed?|use|set|add|remove|swap)\b/i, 1],
+  [/`[^`]+`/, 1],
+];
+const POINTER_WORDS = /https?:\/\/|\bstarting point\b|\b(?:take a )?look (?:at|into)\b|\bcontributing guide\b/i;
+export function fixScore(sentence) {
+  let n = 0;
+  for (const [re, w] of FIX_WORDS) if (re.test(sentence)) n += w;
+  return POINTER_WORDS.test(sentence) ? n - 3 : n;
+}
+// the sentences of a one-line quote with their start; a fenced code block is a piece of its own, so prose after it starts one
+export function sentencesOf(s) {
+  const out = [];
+  const re = /```[\s\S]*?(?:```|$)/g;
+  let last = 0;
+  const prose = (from, to) => {
+    const part = s.slice(from, to);
+    const sp = /(?<=[.!?])\s+(?=[A-Z0-9@`("'])/g;
+    let i = 0, m;
+    const push = (a, b) => { const raw = part.slice(a, b); const t = raw.trim(); if (t.length >= 8) out.push({ text: t, start: from + a + raw.indexOf(t) }); };
+    while ((m = sp.exec(part))) { push(i, m.index); i = m.index + m[0].length; }
+    push(i, part.length);
+  };
+  let m;
+  while ((m = re.exec(s))) { prose(last, m.index); last = m.index + m[0].length; }
+  prose(last, s.length);
+  return out;
+}
+export function fixClip(s, n) {
+  if (s.length <= n) return s;
+  const shown = n - 1;
+  const parts = sentencesOf(s);
+  const headBest = Math.max(0, ...parts.filter((p) => p.start < shown).map((p) => fixScore(p.text.slice(0, shown - p.start))));
+  let best = null;
+  for (const p of parts) { const sc = fixScore(p.text); if (sc >= 3 && (!best || sc > best.sc)) best = { ...p, sc }; }
+  if (!best || headBest >= 3 || best.start + best.text.length <= shown) return clip(s, n);
+  return '…' + clip(best.text, n - 1);
+}
+
 export function splitNoneSentence(hasQuote) {
   return hasQuote
     ? 'The two checks disagreed on this task: one run found the quoted text, the other found nothing. Not counted as a flag.'
     : 'The two checks disagreed on this task; no quoted evidence is shown for it.';
+}
+
+// BEN-624: a two-check disputed task whose other check got no reply from the model (run json noReply, or an empty rationale)
+// must not read "the other found nothing". Shared by the public table (shape), the BEN-621 repair and audit rows.
+export function noReplySentence(anyRunFlag, where) {
+  const found = anyRunFlag === 'A' ? 'a stated fix' : 'a pointer to the fix';
+  return `Disputed: one of the two checks found ${found}; the model gave no answer for the other, so that check is not counted as finding nothing. Not counted as a flag until the task is read again${where ? '; the quote is ' + where : ''}.`;
+}
+
+// BEN-624: two checks that both found something (B and B) but quoted text that does not overlap step down to "none" and read
+// as disputed (django__django-12325); neither found nothing.
+export function bothFoundSentence(tier, where) {
+  const found = tier === 'A' ? 'a stated fix' : 'a pointer to the fix';
+  return `Disputed: both checks found ${found}, but they quoted different text, so they do not agree on one reading. Not counted as a flag${where ? '; the quotes are ' + where : ''}.`;
+}
+
+// Critic note on BEN-623: three checks where the model gave no answer for one and the other two both found something (A / no reply
+// / A, astropy__astropy-13398). Two that answered on the same tier with overlapping text would have settled the task, so the text
+// they quoted differs; neither found nothing and the unanswered one did not disagree.
+export function twoNoReplySentence(tier, where) {
+  const found = tier === 'A' ? 'a stated fix' : 'a pointer to the fix';
+  return `Disputed after three checks: the two that answered both found ${found}, but they quoted different text, so they do not agree on one reading. The model gave no answer for the other check, so it is not counted as finding nothing. Not counted as a flag${where ? '; the quotes are ' + where : ''}.`;
+}
+const isFound = (x) => x === 'A' || x === 'B';
+// [the two answered tiers] when exactly one of three runs is unanswered and the other two both found something, else null
+function twoAnsweredFound(t) {
+  if (!t[2] || t.filter((x) => x === 'noreply').length !== 1) return null;
+  const a = t.filter((x) => x !== 'noreply');
+  return a.length === 2 && a.every(isFound) ? a : null;
+}
+
+// BEN-624: the one choice of disputed sentence. tiers: each stored run's tier, 'noreply' for a run the model did not answer, null
+// for a run not made. Three checks: the three-check sentence; two with one unanswered: no reply; two that both found something:
+// both found; otherwise one found something and the other found nothing.
+export function disputedVerdict(anyRunFlag, tiers, where) {
+  const t = (tiers || []).slice(0, 3);
+  const two = twoAnsweredFound(t);
+  if (two) return twoNoReplySentence(two[0] === two[1] && anyRunFlag === 'A' ? two[0] : 'B', where);
+  if (t[2]) return disputedSentence(anyRunFlag, 3, where);
+  if (t[0] === 'noreply' || t[1] === 'noreply') return noReplySentence(anyRunFlag, where);
+  const found = (x) => x === 'A' || x === 'B';
+  if (found(t[0]) && found(t[1])) return bothFoundSentence(t[0] === t[1] ? t[0] : 'B', where);
+  return disputedSentence(anyRunFlag, 2, where);
+}
+// which of disputedVerdict's sentences applies, for badges and page titles: 'two_no_reply' | 'three' | 'no_reply' | 'both' | 'one'
+export function disputedReading(tiers) {
+  const t = (tiers || []).slice(0, 3);
+  if (twoAnsweredFound(t)) return 'two_no_reply';
+  if (t[2]) return 'three';
+  if (t[0] === 'noreply' || t[1] === 'noreply') return 'no_reply';
+  const found = (x) => x === 'A' || x === 'B';
+  return found(t[0]) && found(t[1]) ? 'both' : 'one';
+}
+// a stored run json (string or object) as disputedVerdict reads it
+export function runTier(r) {
+  if (!r) return null;
+  const x = typeof r === 'string' ? JSON.parse(r) : r;
+  if (x.noReply === true || (typeof x.rationale === 'string' && !x.rationale.trim())) return 'noreply';
+  return x.tier || null;
 }
 
 // The words a person reads for a quote's kind (stored as stated_fix | points_to). site-src/js/app.js L.KIND holds the same words.
@@ -252,7 +373,7 @@ export function tiebreakPool(d, runs) {
 }
 
 export function verdictSentence(tier, agreement, firstQuote, ov) {
-  if (tier === 'A') return `The text states the fix: “${clip(oneLine(firstQuote || ''), 170)}”`;
+  if (tier === 'A') return `The text states the fix: “${fixClip(oneLine(firstQuote || ''), 170)}”`;
   if (tier === 'C') return `${ov.matched} of ${ov.total} added patch lines appear in the issue or discussion.`;
   if (tier === 'B')
     return agreement === 'split'
@@ -264,7 +385,7 @@ export function verdictSentence(tier, agreement, firstQuote, ov) {
 
 export function tiebreakVerdict(d, tier, firstQuote) {
   if (!d.decided) return 'Three checks did not settle on one reading, so this task stays disputed; the quoted text each found is on this page.';
-  const q = clip(oneLine(firstQuote || ''), 160);
+  const q = (tier === 'A' ? fixClip : clip)(oneLine(firstQuote || ''), 160);
   return tier === 'A'
     ? `A third check settled an earlier disagreement. The text states the fix: “${q}”`
     : `A third check settled an earlier disagreement. The text points to the exact place to change: “${q}”`;
@@ -291,7 +412,7 @@ export function stateOf(tier, j, link) {
 export function verdictOf(tier, state, j, ov, link) {
   let v;
   if (state === 'disputed') {
-    v = disputedSentence(disputedFound(j.anyRunFlag, j.runs.flatMap((x) => x.quotes)), j.runs.length, 'in the runs');
+    v = disputedVerdict(disputedFound(j.anyRunFlag, j.runs.flatMap((x) => x.quotes)), j.runs.map((x) => x.tier), 'in the runs');
   } else if (state === 'rule_clear') {
     v = 'No rule matched: no added patch line appears in the text and the fix pull request is not linked. The text was not read by a model (add --judge for Tier A/B).';
   } else if (state === 'link') {

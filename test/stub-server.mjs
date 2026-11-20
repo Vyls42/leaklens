@@ -8,7 +8,7 @@ const recorded = JSON.parse(fs.readFileSync(new URL('../fixtures/judge-recorded.
 const fixture = fs.readFileSync(new URL('../fixtures/swe-bench-verified-10.jsonl', import.meta.url), 'utf8')
   .split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
-// opts.failAfter: answer HTTP 500 to every request after the first n. opts.rejectSchema: answer 400 to json_schema.
+// opts.blankAnswers: every answer has no rationale (BEN-620). opts.failAfter: answer HTTP 500 to every request after the first n. opts.rejectSchema: answer 400 to json_schema.
 export function startStub(opts = {}) {
   const requests = [];
   const server = http.createServer((req, res) => {
@@ -28,6 +28,8 @@ export function startStub(opts = {}) {
       if (run < 0 || !task) return send(400, { error: 'stub: unknown prompt' });
       const ans = recorded[task.instance_id].runs[run];
       if (!ans) return send(400, { error: `stub: no recorded check ${run + 1} for ${task.instance_id}` });
+      // BEN-620: opts.blankAnswers answers every check with a reply that carries no verdict
+      if (opts.blankAnswers) return send(200, { choices: [{ message: { role: 'assistant', content: '{"tier":"none","quotes":[]}' } }] });
       const content = opts.wrapInProse ? 'Here is my answer:\n```json\n' + JSON.stringify(ans) + '\n```' : JSON.stringify(ans);
       send(200, { choices: [{ message: { role: 'assistant', content } }] });
     });
